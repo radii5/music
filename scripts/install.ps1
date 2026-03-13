@@ -312,8 +312,8 @@ if (Test-Path $denoDest) {
 $curPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
 if ($curPath -notlike "*$installDir*") {
     [System.Environment]::SetEnvironmentVariable("PATH", "$curPath;$installDir", "User")
+    $env:PATH = "$env:PATH;$installDir"
     Write-Host "  `e[32m✓`e[0m Added $installDir to PATH"
-    Write-Host "  `e[2m(restart your terminal for it to take effect)`e[0m"
 } else {
     Write-Host "  `e[2m✓ $installDir already in PATH`e[0m"
 }

@@ -30,7 +30,8 @@ func Run(args []string) {
 	opts := parseArgs(args)
 
 	if opts.URL == "" {
-		color.Red("✗ No URL provided")
+		color.Red("  ✗ No URL provided")
+		fmt.Println("  Usage: radii5 <url>")
 		os.Exit(1)
 	}
 

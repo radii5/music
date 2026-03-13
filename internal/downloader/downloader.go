@@ -132,6 +132,7 @@ func ytDlpDownload(url, format, outPath string) error {
 		"--progress",
 		"--newline",
 		"--no-colors",
+		"--js-runtimes", "deno",
 		"-o", outPath,
 		url,
 	}
@@ -154,6 +155,7 @@ func ytDlpDownload(url, format, outPath string) error {
 
 	var bar *progress.Bar
 	var barMu sync.Mutex
+	var barOnce sync.Once
 
 	scanPipe := func(r io.Reader, isStderr bool) {
 		scanner := bufio.NewScanner(r)
@@ -172,7 +174,7 @@ func ytDlpDownload(url, format, outPath string) error {
 			}
 			bar.Set(current)
 			if pct >= 100 {
-				bar.Finish()
+				barOnce.Do(func() { bar.Finish() })
 			}
 			barMu.Unlock()
 		}
@@ -186,7 +188,7 @@ func ytDlpDownload(url, format, outPath string) error {
 
 	barMu.Lock()
 	if bar != nil {
-		bar.Finish()
+		barOnce.Do(func() { bar.Finish() })
 	}
 	barMu.Unlock()
 

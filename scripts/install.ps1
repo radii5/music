@@ -20,6 +20,7 @@ Write-Host ""
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
 # ── compile C# downloader (uses HttpClient — no obsolete WebRequest) ──────────
+if (-not ([System.Management.Automation.PSTypeName]'ChunkDownloader').Type) {
 Add-Type -Language CSharp @"
 using System;
 using System.IO;
@@ -160,6 +161,7 @@ public static class ChunkDownloader
     }
 }
 "@
+} # end if ChunkDownloader not loaded
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 function Get-GHRelease([string]$Repo) {
@@ -265,7 +267,48 @@ if (Test-Path $ffDest) {
     }
 }
 
-# ── 4. PATH ───────────────────────────────────────────────────────────────────
+# ── 4. deno (JS runtime for yt-dlp) ──────────────────────────────────────────
+$denoDest = Join-Path $installDir "deno.exe"
+if (Test-Path $denoDest) {
+    Write-Host "  `e[2m✓ deno already installed`e[0m"
+    Write-Host ""
+} else {
+    Write-Host "  `e[36m→`e[0m  deno"
+    try {
+        $denoRel   = Get-GHRelease "denoland/deno"
+        $denoAsset = $denoRel.assets |
+            Where-Object { $_.name -eq "deno-x86_64-pc-windows-msvc.zip" } |
+            Select-Object -First 1
+        if (-not $denoAsset) { throw "deno asset not found" }
+
+        $denoZip = Join-Path $env:TEMP "deno-radii5.zip"
+        $denoTmp = Join-Path $env:TEMP "deno-radii5-extract"
+
+        Write-Host "  `e[2mversion`e[0m  $($denoRel.tag_name)"
+        Write-Host "  `e[2mdest   `e[0m  $denoDest"
+        Write-Host ""
+
+        Install-Binary -Url $denoAsset.browser_download_url -Dest $denoZip
+
+        if (Test-Path $denoTmp) { Remove-Item $denoTmp -Recurse -Force }
+        Expand-Archive -Path $denoZip -DestinationPath $denoTmp -Force
+        Remove-Item $denoZip -Force
+
+        $denoExe = Get-ChildItem $denoTmp -Filter "deno.exe" | Select-Object -First 1
+        if (-not $denoExe) { throw "deno.exe not found in archive" }
+        Copy-Item $denoExe.FullName -Destination $denoDest -Force
+        Remove-Item $denoTmp -Recurse -Force
+
+        Write-Host "  `e[32m✓`e[0m deno $($denoRel.tag_name)"
+        Write-Host ""
+    } catch {
+        Write-Host "  `e[33m⚠`e[0m deno install failed: $_" -ForegroundColor Yellow
+        Write-Host "  Install manually: https://deno.com"
+        Write-Host ""
+    }
+}
+
+# ── 5. PATH ───────────────────────────────────────────────────────────────────
 $curPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
 if ($curPath -notlike "*$installDir*") {
     [System.Environment]::SetEnvironmentVariable("PATH", "$curPath;$installDir", "User")

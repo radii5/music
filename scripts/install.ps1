@@ -19,21 +19,21 @@ Write-Host ""
 
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
-# ── compile pure C# chunked downloader ───────────────────────────────────────
-# PowerShell script blocks cannot run on ThreadPool threads (no Runspace).
-# We compile a small C# class that does everything in pure .NET.
+# ── compile C# downloader (uses HttpClient — no obsolete WebRequest) ──────────
 Add-Type -Language CSharp @"
 using System;
 using System.IO;
-using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Threading;
-using System.Collections.Generic;
+using System.Threading.Tasks;
+using System.Collections.Concurrent;
 
 public static class ChunkDownloader
 {
     static long _downloaded;
     static long _total;
-    static int  _barWidth = 30;
+    const  int  BarWidth = 30;
 
     static string FmtBytes(long n) {
         if (n >= 1 << 20) return string.Format("{0:F1} MB", (double)n / (1 << 20));
@@ -42,112 +42,102 @@ public static class ChunkDownloader
     }
 
     static void DrawBar(long cur, long tot) {
-        int filled = (tot > 0) ? (int)Math.Min((double)cur / tot * _barWidth, _barWidth) : _barWidth / 2;
+        int filled = (tot > 0) ? (int)Math.Min((double)cur / tot * BarWidth, BarWidth) : BarWidth / 2;
         int pct    = (tot > 0) ? (int)((double)cur / tot * 100) : 0;
-        string bar = new string('\u2588', filled) + new string('\u2591', _barWidth - filled);
+        string bar = new string('\u2588', filled) + new string('\u2591', BarWidth - filled);
         string line = string.Format("  \u001b[36m[{0}]\u001b[0m  {1} / {2}  ({3}%)",
             bar, FmtBytes(cur), FmtBytes(tot), pct);
         Console.Write("\r" + line.PadRight(72));
     }
 
     static void DrawBarDone(long tot) {
-        string bar  = new string('\u2588', _barWidth);
+        string bar  = new string('\u2588', BarWidth);
         string line = string.Format("  \u001b[32m[{0}]\u001b[0m  {1} \u2713", bar, FmtBytes(tot));
         Console.Write("\r" + line.PadRight(72) + "\n");
     }
 
     public static void Download(string url, string dest, int numThreads) {
-        // HEAD to get size
-        var hreq = (HttpWebRequest)WebRequest.Create(url);
-        hreq.Method    = "HEAD";
-        hreq.UserAgent = "radii5-installer";
-        long total = 0;
-        try {
-            using (var hr = (HttpWebResponse)hreq.GetResponse())
-                total = hr.ContentLength;
-        } catch {}
+        using (var client = new HttpClient()) {
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("radii5-installer");
 
-        _downloaded = 0;
-        _total      = total;
+            // HEAD to get total size
+            long total = 0;
+            try {
+                var headReq = new HttpRequestMessage(HttpMethod.Head, url);
+                var headRes = client.SendAsync(headReq).GetAwaiter().GetResult();
+                total = headRes.Content.Headers.ContentLength ?? 0;
+            } catch {}
 
-        if (total <= 0 || numThreads <= 1) {
-            // Simple streaming download
-            var req  = (HttpWebRequest)WebRequest.Create(url);
-            req.UserAgent = "radii5-installer";
-            using (var rs  = req.GetResponse().GetResponseStream())
-            using (var fs  = File.OpenWrite(dest)) {
-                var buf = new byte[65536];
-                int n;
-                while ((n = rs.Read(buf, 0, buf.Length)) > 0) {
-                    fs.Write(buf, 0, n);
-                    Interlocked.Add(ref _downloaded, n);
-                    DrawBar(_downloaded, total);
-                }
-            }
-            DrawBarDone(_downloaded);
-            return;
-        }
+            _downloaded = 0;
+            _total      = total;
 
-        long chunkSize = total / numThreads;
-        var  tmpFiles  = new string[numThreads];
-        var  events    = new ManualResetEventSlim[numThreads];
-        var  errors    = new System.Collections.Concurrent.ConcurrentBag<string>();
-
-        for (int i = 0; i < numThreads; i++) {
-            tmpFiles[i] = Path.GetTempFileName();
-            events[i]   = new ManualResetEventSlim(false);
-
-            long start = i * chunkSize;
-            long end   = (i == numThreads - 1) ? total - 1 : start + chunkSize - 1;
-
-            // Capture for closure
-            var state = new { Url=url, Start=start, End=end, Tmp=tmpFiles[i], Evt=events[i], Bag=errors };
-
-            ThreadPool.QueueUserWorkItem(_ => {
-                try {
-                    var rq = (HttpWebRequest)WebRequest.Create(state.Url);
-                    rq.AddRange(state.Start, state.End);
-                    rq.UserAgent = "radii5-installer";
-                    using (var rs = rq.GetResponse().GetResponseStream())
-                    using (var fs = File.OpenWrite(state.Tmp)) {
-                        var buf = new byte[65536];
-                        int n;
-                        while ((n = rs.Read(buf, 0, buf.Length)) > 0) {
-                            fs.Write(buf, 0, n);
-                            Interlocked.Add(ref _downloaded, (long)n);
-                        }
+            if (total <= 0 || numThreads <= 1) {
+                // Simple streaming fallback
+                using (var rs = client.GetStreamAsync(url).GetAwaiter().GetResult())
+                using (var fs = File.OpenWrite(dest)) {
+                    var buf = new byte[65536];
+                    int n;
+                    while ((n = rs.Read(buf, 0, buf.Length)) > 0) {
+                        fs.Write(buf, 0, n);
+                        Interlocked.Add(ref _downloaded, n);
+                        DrawBar(_downloaded, total);
                     }
-                } catch (Exception ex) {
-                    state.Bag.Add(ex.Message);
-                } finally {
-                    state.Evt.Set();
                 }
-            });
-        }
+                DrawBarDone(_downloaded);
+                return;
+            }
 
-        // Poll and redraw bar until all chunks done
-        bool allDone = false;
-        while (!allDone) {
-            DrawBar(_downloaded, total);
-            Thread.Sleep(80);
-            allDone = true;
-            foreach (var ev in events)
-                if (!ev.IsSet) { allDone = false; break; }
-        }
-        DrawBarDone(total);
+            long chunkSize = total / numThreads;
+            var  tmpFiles  = new string[numThreads];
+            var  tasks     = new Task[numThreads];
+            var  errors    = new ConcurrentBag<string>();
 
-        if (errors.Count > 0) {
-            string msg;
-            errors.TryTake(out msg);
-            throw new Exception("Chunk download failed: " + msg);
-        }
+            for (int i = 0; i < numThreads; i++) {
+                tmpFiles[i] = Path.GetTempFileName();
+                long start  = i * chunkSize;
+                long end    = (i == numThreads - 1) ? total - 1 : start + chunkSize - 1;
+                string tmp  = tmpFiles[i];
 
-        // Assemble
-        using (var fs = File.OpenWrite(dest)) {
-            foreach (var tmp in tmpFiles) {
-                var bytes = File.ReadAllBytes(tmp);
-                fs.Write(bytes, 0, bytes.Length);
-                File.Delete(tmp);
+                tasks[i] = Task.Run(async () => {
+                    try {
+                        var req = new HttpRequestMessage(HttpMethod.Get, url);
+                        req.Headers.Range = new RangeHeaderValue(start, end);
+                        var res    = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+                        using (var rs = await res.Content.ReadAsStreamAsync())
+                        using (var fs = File.OpenWrite(tmp)) {
+                            var buf = new byte[65536];
+                            int n;
+                            while ((n = await rs.ReadAsync(buf, 0, buf.Length)) > 0) {
+                                fs.Write(buf, 0, n);
+                                Interlocked.Add(ref _downloaded, (long)n);
+                            }
+                        }
+                    } catch (Exception ex) {
+                        errors.Add(ex.Message);
+                    }
+                });
+            }
+
+            // Poll bar while tasks run
+            while (!Task.WhenAll(tasks).Wait(80)) {
+                DrawBar(_downloaded, total);
+            }
+            DrawBar(total, total);
+            DrawBarDone(total);
+
+            if (!errors.IsEmpty) {
+                string msg;
+                errors.TryTake(out msg);
+                throw new Exception("Chunk failed: " + msg);
+            }
+
+            // Assemble chunks in order
+            using (var fs = File.OpenWrite(dest)) {
+                foreach (var tmp in tmpFiles) {
+                    byte[] bytes = File.ReadAllBytes(tmp);
+                    fs.Write(bytes, 0, bytes.Length);
+                    File.Delete(tmp);
+                }
             }
         }
     }
@@ -189,7 +179,7 @@ if (Get-Command "yt-dlp.exe" -ErrorAction SilentlyContinue) {
     Write-Host "  `e[36m→`e[0m  yt-dlp"
     $ytRel   = Get-GHRelease "yt-dlp/yt-dlp"
     $ytAsset = $ytRel.assets | Where-Object { $_.name -eq "yt-dlp.exe" } | Select-Object -First 1
-    if (-not $ytAsset) { Write-Host "  `e[31m✗`e[0m yt-dlp.exe not found in release" -ForegroundColor Red; exit 1 }
+    if (-not $ytAsset) { Write-Host "  `e[31m✗`e[0m yt-dlp.exe not found" -ForegroundColor Red; exit 1 }
 
     $ytDest = Join-Path $installDir "yt-dlp.exe"
     Write-Host "  `e[2mversion`e[0m  $($ytRel.tag_name)"
@@ -208,8 +198,7 @@ if (Test-Path $ffDest) {
 } else {
     Write-Host "  `e[36m→`e[0m  ffmpeg"
     try {
-        $ffRel = Get-GHRelease "BtbN/FFmpeg-Builds"
-
+        $ffRel   = Get-GHRelease "BtbN/FFmpeg-Builds"
         $ffAsset = $ffRel.assets |
             Where-Object { $_.name -eq "ffmpeg-master-latest-win64-gpl.zip" } |
             Select-Object -First 1
@@ -218,7 +207,6 @@ if (Test-Path $ffDest) {
                 Where-Object { $_.name -like "*win64*gpl*.zip" -and $_.name -notlike "*shared*" } |
                 Select-Object -First 1
         }
-
         if (-not $ffAsset) { throw "No matching asset found" }
 
         $ffZip = Join-Path $env:TEMP "ffmpeg-radii5.zip"
@@ -236,7 +224,7 @@ if (Test-Path $ffDest) {
         Remove-Item $ffZip -Force
 
         $ffExe = Get-ChildItem $ffTmp -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
-        if (-not $ffExe) { throw "ffmpeg.exe not found inside archive" }
+        if (-not $ffExe) { throw "ffmpeg.exe not found in archive" }
 
         foreach ($exe in @("ffmpeg.exe", "ffprobe.exe", "ffplay.exe")) {
             $src = Join-Path $ffExe.DirectoryName $exe

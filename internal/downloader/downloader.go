@@ -131,7 +131,8 @@ func Download(url, format, outputDir string, threads int) error {
 				return fmt.Errorf("download failed: %w", err)
 			}
 		} else {
-			cyan.Println("  → Downloading...\n")
+			cyan.Println("  → Downloading...")
+			fmt.Println()
 			if err := streamDownload(info.URL, tmpFile, size); err != nil {
 				os.Remove(tmpFile)
 				return fmt.Errorf("download failed: %w", err)

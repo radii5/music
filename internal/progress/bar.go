@@ -31,7 +31,7 @@ func (b *Bar) Set(current int64) {
 	b.render()
 }
 
-
+func (b *Bar) render() {
 	current := b.current.Load()
 
 	// Throttle — only redraw every 50KB

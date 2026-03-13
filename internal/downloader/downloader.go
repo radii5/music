@@ -1,7 +1,6 @@
 package downloader
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -18,203 +18,469 @@ import (
 	"github.com/radii5/radii5/internal/progress"
 )
 
-// Info holds metadata returned by yt-dlp --dump-json
-type Info struct {
+type VideoInfo struct {
 	Title      string  `json:"title"`
+	Artist     string  `json:"artist"`
 	Uploader   string  `json:"uploader"`
 	Album      string  `json:"album"`
+	Duration   float64 `json:"duration"`
+	URL        string  `json:"url"`
 	Thumbnail  string  `json:"thumbnail"`
-	URL        string  `json:"url"`         // direct audio URL (single format)
 	Ext        string  `json:"ext"`
+	AudioCodec string  `json:"acodec"`
 	Filesize   int64   `json:"filesize"`
 	FilesizeApprox int64 `json:"filesize_approx"`
-	ID         string  `json:"id"`
-	WebpageURL string  `json:"webpage_url"`
 }
 
-// Download orchestrates the full download pipeline for a given URL.
-func Download(url, format, outputDir string, threads int) error {
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("creating output dir: %w", err)
+func (v *VideoInfo) DisplayArtist() string {
+	if v.Artist != "" {
+		return v.Artist
 	}
-	if err := checkYtDlp(); err != nil {
-		return err
-	}
+	return v.Uploader
+}
 
-	color.New(color.FgCyan, color.Bold).Printf("  Fetching info...\n")
+var httpClient = &http.Client{
+	Transport: &http.Transport{
+		ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+	},
+}
 
-	// Single yt-dlp call: fetch metadata AND download in one pass.
-	// --print fires before download starts, giving us title/uploader for display.
-	info, err := ytDlpDownloadWithInfo(url, format, outputDir, threads)
+const maxRetries = 5
+
+func selfDir() string {
+	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("yt-dlp download: %w", err)
+		return ""
+	}
+	return filepath.Dir(exe)
+}
+
+func findBin(name string) string {
+	if runtime.GOOS == "windows" && !strings.HasSuffix(name, ".exe") {
+		name += ".exe"
+	}
+	if dir := selfDir(); dir != "" {
+		if candidate := filepath.Join(dir, name); fileExists(candidate) {
+			return candidate
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if candidate := filepath.Join(home, ".radii5", "bin", name); fileExists(candidate) {
+			return candidate
+		}
+	}
+	if path, err := exec.LookPath(name); err == nil {
+		return path
+	}
+	return name
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func Download(url, format, outputDir string, threads int) error {
+	bold := color.New(color.FgWhite, color.Bold)
+	cyan := color.New(color.FgCyan)
+
+	fmt.Println()
+	cyan.Print("  → ")
+	bold.Println("Resolving track...")
+
+	info, err := resolve(url)
+	if err != nil {
+		return fmt.Errorf("could not resolve URL: %w", err)
 	}
 
-	// Write ID3 tags for MP3
-	if format == "mp3" && info != nil {
-		outPath := filepath.Join(outputDir, sanitizeFilename(info.Title)+"."+format)
-		_ = metadata.WriteMP3Tags(outPath, info.Title, info.Uploader, info.Album, info.Thumbnail)
+	fmt.Println()
+	color.New(color.FgHiWhite, color.Bold).Printf("  %s\n", info.Title)
+	if artist := info.DisplayArtist(); artist != "" {
+		color.New(color.FgHiBlack).Printf("  %s\n", artist)
+	}
+	if info.Duration > 0 {
+		color.New(color.FgHiBlack).Printf("  %s\n", formatDuration(info.Duration))
+	}
+	fmt.Println()
+
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("cannot create output dir: %w", err)
+	}
+
+	safeTitle := sanitizeFilename(info.Title)
+	tmpFile := filepath.Join(outputDir, safeTitle+".tmp")
+	outFile := filepath.Join(outputDir, safeTitle+"."+format)
+
+	// If direct URL available, download ourselves (fast parallel chunks).
+	// Otherwise fall back to yt-dlp for extraction + conversion.
+	if info.URL != "" {
+		size := info.Filesize
+		if size == 0 {
+			size = info.FilesizeApprox
+		}
+
+		_, supportsRange, _ := probeURL(info.URL)
+		start := time.Now()
+
+		if supportsRange && size > 0 && threads > 1 {
+			cyan.Printf("  → Downloading in %d parallel chunks...\n\n", threads)
+			if err := parallelDownload(info.URL, tmpFile, size, threads); err != nil {
+				os.Remove(tmpFile)
+				return fmt.Errorf("download failed: %w", err)
+			}
+		} else {
+			cyan.Println("  → Downloading...\n")
+			if err := streamDownload(info.URL, tmpFile, size); err != nil {
+				os.Remove(tmpFile)
+				return fmt.Errorf("download failed: %w", err)
+			}
+		}
+
+		elapsed := time.Since(start)
+
+		if format != info.Ext {
+			cyan.Print("\n  → Converting to " + strings.ToUpper(format) + "...")
+			if err := convertAudio(tmpFile, outFile, format); err != nil {
+				os.Remove(tmpFile)
+				return fmt.Errorf("conversion failed: %w", err)
+			}
+			os.Remove(tmpFile)
+			cyan.Println(" done")
+		} else {
+			os.Rename(tmpFile, outFile)
+		}
+
+		if format == "mp3" {
+			cyan.Print("  → Writing metadata...")
+			_ = metadata.WriteMP3Tags(outFile, info.Title, info.DisplayArtist(), info.Album, info.Thumbnail)
+			cyan.Println(" done")
+		}
+
+		fmt.Println()
+		color.New(color.FgGreen, color.Bold).Print("  ✓ ")
+		fmt.Printf("Saved to %s", color.New(color.FgCyan).Sprint(outFile))
+		color.New(color.FgHiBlack).Printf("  (%s)\n\n", elapsed.Round(time.Millisecond))
+
+	} else {
+		// No direct URL — let yt-dlp handle the full download + conversion
+		if err := ytDlpFallback(url, format, outFile, threads); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-// checkYtDlp verifies yt-dlp is installed and accessible.
-func checkYtDlp() error {
-	if _, err := exec.LookPath("yt-dlp"); err != nil {
-		return fmt.Errorf(
-			"yt-dlp not found — install it first:\n  https://github.com/yt-dlp/yt-dlp#installation",
-		)
-	}
-	return nil
-}
+func resolve(url string) (*VideoInfo, error) {
+	url = cleanURL(url)
+	ytdlp := findBin("yt-dlp")
 
-// fetchInfo runs yt-dlp --dump-json to get track metadata + direct stream URL.
-func fetchInfo(url, format string) (*Info, error) {
-	args := []string{
+	cmd := exec.Command(ytdlp,
 		"--dump-json",
+		"--format", "bestaudio",
 		"--no-playlist",
-		"-f", bestAudioFormat(format),
 		url,
-	}
+	)
 
-	cmd := exec.Command("yt-dlp", args...)
 	out, err := cmd.Output()
 	if err != nil {
-		// Surface yt-dlp stderr for better diagnostics
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("yt-dlp: %s", strings.TrimSpace(string(exitErr.Stderr)))
+		if _, e := exec.LookPath(ytdlp); e != nil {
+			return nil, fmt.Errorf("yt-dlp not found — run the installer")
 		}
-		return nil, err
+		return nil, fmt.Errorf("yt-dlp error: %w", err)
 	}
 
-	var info Info
+	var info VideoInfo
 	if err := json.Unmarshal(out, &info); err != nil {
-		return nil, fmt.Errorf("parsing yt-dlp JSON: %w", err)
+		return nil, fmt.Errorf("failed to parse track info: %w", err)
 	}
 	return &info, nil
 }
 
-// ytDlpDownloadWithInfo runs a single yt-dlp invocation that prints metadata
-// before downloading, so we only hit YouTube's API once instead of twice.
-func ytDlpDownloadWithInfo(url, format, outputDir string, threads int) (*Info, error) {
-	outTmpl := filepath.Join(outputDir, "%(title)s.%(ext)s")
+func ytDlpFallback(url, format, outFile string, threads int) error {
+	cyan := color.New(color.FgCyan)
+	cyan.Printf("  → Downloading via yt-dlp (%d fragments)...\n\n", threads)
 
+	ytdlp := findBin("yt-dlp")
 	args := []string{
 		"--no-playlist",
 		"-x",
 		"--audio-format", format,
 		"--audio-quality", "0",
-		"--progress",
-		"--newline",
-		"--no-colors",
 		"--concurrent-fragments", fmt.Sprintf("%d", threads),
-		"--js-runtimes", "deno",
-		// Print JSON metadata to stdout before downloading
-		"--print", "%()j",
-		"-o", outTmpl,
+		"--no-colors",
+		"--progress", "--newline",
+		"-o", outFile,
 		url,
 	}
 
-	cmd := exec.Command("yt-dlp", args...)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
+	cmd := exec.Command(ytdlp, args...)
+	stdout, _ := cmd.StdoutPipe()
+	stderr, _ := cmd.StderrPipe()
+	cmd.Start()
 
-	var info *Info
 	var bar *progress.Bar
-	var barMu sync.Mutex
-	var barOnce sync.Once
-	var metaPrinted bool
+	var mu sync.Mutex
+	var once sync.Once
 
-	scanPipe := func(r io.Reader, isStderr bool) {
-		scanner := bufio.NewScanner(r)
-		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	scan := func(r io.Reader, isErr bool) {
+		scanner := newLineScanner(r)
 		for scanner.Scan() {
 			line := scanner.Text()
-
-			// First non-empty stdout line is the JSON metadata from --print
-			if !isStderr && info == nil && len(line) > 0 && line[0] == '{' {
-				var parsed Info
-				if json.Unmarshal([]byte(line), &parsed) == nil {
-					info = &parsed
-					// Clear "Fetching info..." and print track details
-					fmt.Printf("\r\033[K")
-					color.New(color.FgWhite, color.Bold).Printf("  %s\n", info.Title)
-					if info.Uploader != "" {
-						color.New(color.FgHiBlack).Printf("  %s\n", info.Uploader)
-					}
-					fmt.Println()
-					metaPrinted = true
-				}
-				continue
-			}
-
-			// Progress lines
 			pct, total, current, ok := parseYtDlpProgress(line)
 			if ok {
-				barMu.Lock()
+				mu.Lock()
 				if bar == nil {
 					bar = progress.NewBar(total)
 				}
 				bar.Set(current)
 				if pct >= 100 {
-					barOnce.Do(func() {
-						bar.Finish()
-						if info != nil {
-							outPath := filepath.Join(outputDir, sanitizeFilename(info.Title)+"."+format)
-							color.New(color.FgGreen).Printf("  Saved → %s\n", outPath)
-						}
-					})
+					once.Do(func() { bar.Finish() })
 				}
-				barMu.Unlock()
-				continue
-			}
-
-			// Warnings/errors
-			if isStderr {
-				if strings.Contains(line, "WARNING") || strings.Contains(line, "ERROR") {
-					fmt.Fprintf(os.Stderr, "  %s\n", color.YellowString(line))
-				}
+				mu.Unlock()
+			} else if isErr && (strings.Contains(line, "ERROR")) {
+				fmt.Fprintf(os.Stderr, "  %s\n", color.RedString(line))
 			}
 		}
 	}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); scanPipe(stdout, false) }()
-	go func() { defer wg.Done(); scanPipe(stderr, true) }()
+	go func() { defer wg.Done(); scan(stdout, false) }()
+	go func() { defer wg.Done(); scan(stderr, true) }()
 	wg.Wait()
 
-	barMu.Lock()
+	mu.Lock()
 	if bar != nil {
-		barOnce.Do(func() {
-			bar.Finish()
-			if info != nil {
-				outPath := filepath.Join(outputDir, sanitizeFilename(info.Title)+"."+format)
-				color.New(color.FgGreen).Printf("  Saved → %s\n", outPath)
-			}
-		})
-	} else if !metaPrinted {
-		// Already downloaded or no progress output — just clear the fetching line
-		fmt.Printf("\r\033[K")
+		once.Do(func() { bar.Finish() })
 	}
-	barMu.Unlock()
+	mu.Unlock()
 
-	return info, cmd.Wait()
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("yt-dlp: %w", err)
+	}
+
+	color.New(color.FgGreen, color.Bold).Printf("  ✓ Saved to %s\n\n", outFile)
+	return nil
 }
 
-// parseYtDlpProgress parses a yt-dlp progress line.
-// Example: "[download]  45.2% of   103.76MiB at   2.10MiB/s ETA 00:48"
-// Returns pct, totalBytes, currentBytes, ok.
+func probeURL(url string) (int64, bool, error) {
+	resp, err := httpClient.Head(url)
+	if err != nil {
+		return 0, false, err
+	}
+	defer resp.Body.Close()
+	size := resp.ContentLength
+	supportsRange := resp.Header.Get("Accept-Ranges") == "bytes"
+	return size, supportsRange, nil
+}
+
+func parallelDownload(url, dest string, size int64, threads int) error {
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	if err := f.Truncate(size); err != nil {
+		f.Close()
+		return err
+	}
+	f.Close()
+
+	chunkSize := size / int64(threads)
+	var wg sync.WaitGroup
+	errCh := make(chan error, threads)
+	bar := progress.NewBar(size)
+
+	for i := 0; i < threads; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			start := int64(i) * chunkSize
+			end := start + chunkSize - 1
+			if i == threads-1 {
+				end = size - 1
+			}
+			if err := fetchWithRetry(url, dest, start, end, bar); err != nil {
+				errCh <- fmt.Errorf("chunk %d: %w", i, err)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	bar.Finish()
+	close(errCh)
+
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fetchWithRetry(url, dest string, start, end int64, bar *progress.Bar) error {
+	current := start
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)
+		}
+		written, err := fetchRangeToDisk(url, dest, current, end, bar)
+		current += written
+		if err == nil {
+			return nil
+		}
+		if current > end {
+			return nil
+		}
+	}
+	return fmt.Errorf("failed after %d retries", maxRetries)
+}
+
+func fetchRangeToDisk(url, dest string, start, end int64, bar *progress.Bar) (int64, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; radii5/0.1)")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	f, err := os.OpenFile(dest, os.O_WRONLY, 0644)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return 0, err
+	}
+
+	n, err := io.Copy(f, io.TeeReader(resp.Body, bar))
+	return n, err
+}
+
+func streamDownload(url, dest string, size int64) error {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; radii5/0.1)")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	bar := progress.NewBar(size)
+	_, err = io.Copy(f, io.TeeReader(resp.Body, bar))
+	bar.Finish()
+	return err
+}
+
+func convertAudio(input, output, format string) error {
+	ffmpeg := findBin("ffmpeg")
+	var args []string
+	switch format {
+	case "mp3":
+		args = []string{"-i", input, "-codec:a", "libmp3lame", "-qscale:a", "0", "-y", output}
+	case "flac":
+		args = []string{"-i", input, "-codec:a", "flac", "-compression_level", "8", "-y", output}
+	case "m4a":
+		args = []string{"-i", input, "-codec:a", "aac", "-b:a", "256k", "-y", output}
+	default:
+		args = []string{"-i", input, "-y", output}
+	}
+	cmd := exec.Command(ffmpeg, args...)
+	cmd.Stderr = io.Discard
+	return cmd.Run()
+}
+
+func cleanURL(raw string) string {
+	for _, param := range []string{"?si=", "&si="} {
+		if idx := strings.Index(raw, param); idx != -1 {
+			raw = raw[:idx]
+		}
+	}
+	return raw
+}
+
+func sanitizeFilename(name string) string {
+	replacer := strings.NewReplacer(
+		"/", "-", "\\", "-", ":", "-", "*", "",
+		"?", "", "\"", "", "<", "", ">", "", "|", "",
+	)
+	return strings.TrimSpace(replacer.Replace(name))
+}
+
+func formatDuration(secs float64) string {
+	m := int(secs) / 60
+	s := int(secs) % 60
+	return fmt.Sprintf("%d:%02d", m, s)
+}
+
+func newLineScanner(r io.Reader) *lineScanner {
+	return &lineScanner{r: r, buf: make([]byte, 0, 4096)}
+}
+
+type lineScanner struct {
+	r    io.Reader
+	buf  []byte
+	line string
+	done bool
+}
+
+func (s *lineScanner) Scan() bool {
+	if s.done {
+		return false
+	}
+	tmp := make([]byte, 512)
+	for {
+		if idx := indexByte(s.buf, '\n'); idx >= 0 {
+			s.line = strings.TrimRight(string(s.buf[:idx]), "\r")
+			s.buf = s.buf[idx+1:]
+			return true
+		}
+		n, err := s.r.Read(tmp)
+		if n > 0 {
+			s.buf = append(s.buf, tmp[:n]...)
+		}
+		if err != nil {
+			if len(s.buf) > 0 {
+				s.line = strings.TrimRight(string(s.buf), "\r\n")
+				s.buf = nil
+				s.done = true
+				return s.line != ""
+			}
+			return false
+		}
+	}
+}
+
+func (s *lineScanner) Text() string { return s.line }
+
+func indexByte(b []byte, c byte) int {
+	for i, v := range b {
+		if v == c {
+			return i
+		}
+	}
+	return -1
+}
+
 func parseYtDlpProgress(line string) (pct float64, total, current int64, ok bool) {
 	line = strings.TrimSpace(line)
 	if !strings.HasPrefix(line, "[download]") {
@@ -223,21 +489,17 @@ func parseYtDlpProgress(line string) (pct float64, total, current int64, ok bool
 	line = strings.TrimPrefix(line, "[download]")
 	line = strings.TrimSpace(line)
 
-	// Must contain "% of"
 	ofIdx := strings.Index(line, "% of")
 	if ofIdx < 0 {
 		return
 	}
 
 	pctStr := strings.TrimSpace(line[:ofIdx])
-	_, err := fmt.Sscanf(pctStr, "%f", &pct)
-	if err != nil {
+	if _, err := fmt.Sscanf(pctStr, "%f", &pct); err != nil {
 		return
 	}
 
-	// Parse total size after "of "
 	rest := strings.TrimSpace(line[ofIdx+4:])
-	// rest looks like "103.76MiB at ..."
 	fields := strings.Fields(rest)
 	if len(fields) == 0 {
 		return
@@ -246,13 +508,11 @@ func parseYtDlpProgress(line string) (pct float64, total, current int64, ok bool
 	if total <= 0 {
 		return
 	}
-
 	current = int64(float64(total) * pct / 100)
 	ok = true
 	return
 }
 
-// parseSizeStr converts "103.76MiB", "45.2KiB", "1.2GiB" → bytes.
 func parseSizeStr(s string) int64 {
 	s = strings.ReplaceAll(s, ",", "")
 	var val float64
@@ -261,135 +521,12 @@ func parseSizeStr(s string) int64 {
 	unit = strings.ToLower(unit)
 	switch {
 	case strings.HasPrefix(unit, "gib") || strings.HasPrefix(unit, "gb"):
-		return int64(val * (1 << 30))
+		return int64(val * 1073741824)
 	case strings.HasPrefix(unit, "mib") || strings.HasPrefix(unit, "mb"):
-		return int64(val * (1 << 20))
+		return int64(val * 1048576)
 	case strings.HasPrefix(unit, "kib") || strings.HasPrefix(unit, "kb"):
-		return int64(val * (1 << 10))
+		return int64(val * 1024)
 	default:
 		return int64(val)
 	}
-}
-
-// chunkedDownload downloads a file using parallel HTTP range requests.
-func chunkedDownload(url, outPath string, totalSize int64, threads int) error {
-	if threads <= 1 || totalSize == 0 {
-		return simpleDownload(url, outPath, totalSize)
-	}
-
-	chunkSize := totalSize / int64(threads)
-	type result struct {
-		index int
-		data  []byte
-		err   error
-	}
-
-	results := make(chan result, threads)
-
-	for i := 0; i < threads; i++ {
-		start := int64(i) * chunkSize
-		end := start + chunkSize - 1
-		if i == threads-1 {
-			end = totalSize - 1
-		}
-
-		go func(idx int, start, end int64) {
-			data, err := fetchRange(url, start, end)
-			results <- result{idx, data, err}
-		}(i, start, end)
-	}
-
-	chunks := make([][]byte, threads)
-	bar := progress.NewBar(totalSize)
-
-	for i := 0; i < threads; i++ {
-		r := <-results
-		if r.err != nil {
-			return fmt.Errorf("chunk %d: %w", r.index, r.err)
-		}
-		chunks[r.index] = r.data
-		_, _ = bar.Write(r.data) // update progress
-	}
-	bar.Finish()
-
-	// Assemble chunks into output file
-	f, err := os.Create(outPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	for _, chunk := range chunks {
-		if _, err := f.Write(chunk); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// simpleDownload streams a URL to disk with a progress bar.
-func simpleDownload(url, outPath string, totalSize int64) error {
-	client := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := client.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	f, err := os.Create(outPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	bar := progress.NewBar(totalSize)
-	_, err = io.Copy(f, io.TeeReader(resp.Body, bar))
-	bar.Finish()
-	return err
-}
-
-// fetchRange performs an HTTP Range request and returns the bytes.
-func fetchRange(url string, start, end int64) ([]byte, error) {
-	client := &http.Client{Timeout: 30 * time.Minute}
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
-	}
-
-	return io.ReadAll(resp.Body)
-}
-
-// bestAudioFormat returns a yt-dlp format selector for the desired output format.
-func bestAudioFormat(format string) string {
-	switch format {
-	case "flac", "wav", "aiff":
-		return "bestaudio[ext=flac]/bestaudio[ext=wav]/bestaudio"
-	default:
-		return "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio"
-	}
-}
-
-// sanitizeFilename removes characters that are illegal in filenames.
-func sanitizeFilename(name string) string {
-	replacer := strings.NewReplacer(
-		"/", "-", "\\", "-", ":", "-", "*", "-",
-		"?", "", "\"", "", "<", "", ">", "", "|", "-",
-	)
-	name = replacer.Replace(name)
-	name = strings.TrimSpace(name)
-	if len(name) > 200 {
-		name = name[:200]
-	}
-	return name
 }

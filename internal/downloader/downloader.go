@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -120,22 +121,129 @@ func fetchInfo(url, format string) (*Info, error) {
 }
 
 // ytDlpDownload delegates to yt-dlp when format conversion is required.
+// It parses yt-dlp's progress output and renders it using our own bar.
 func ytDlpDownload(url, format, outPath string) error {
-	color.New(color.FgHiBlack).Println("  Converting via yt-dlp…")
-
 	args := []string{
 		"--no-playlist",
 		"-x",
 		"--audio-format", format,
 		"--audio-quality", "0",
+		// Emit one progress line per update, no ANSI codes of its own
+		"--progress",
+		"--newline",
+		"--no-colors",
 		"-o", outPath,
 		url,
 	}
 
 	cmd := exec.Command("yt-dlp", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+
+	// Capture stderr (yt-dlp writes progress there)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+	// Suppress stdout (redundant info lines)
+	cmd.Stdout = nil
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	// Parse yt-dlp progress lines and drive our bar.
+	// Lines look like:  [download]  12.3% of 103.76MiB at 2.10MiB/s ETA 00:48
+	var bar *progress.Bar
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		pct, total, current, ok := parseYtDlpProgress(line)
+		if !ok {
+			// Not a progress line — suppress noisy yt-dlp info lines,
+			// but surface warnings/errors
+			if strings.Contains(line, "WARNING") || strings.Contains(line, "ERROR") {
+				fmt.Fprintf(os.Stderr, "\n  %s\n", color.YellowString(line))
+			}
+			continue
+		}
+
+		if bar == nil {
+			bar = progress.NewBar(total)
+		}
+		// Sync bar's internal counter to the parsed byte position
+		bar.Set(current)
+
+		if pct >= 100 {
+			bar.Finish()
+		}
+	}
+
+	if bar == nil {
+		// yt-dlp gave no progress lines (e.g. already downloaded) — just finish
+	} else if bar != nil {
+		bar.Finish()
+	}
+
+	return cmd.Wait()
+}
+
+// parseYtDlpProgress parses a yt-dlp progress line.
+// Example: "[download]  45.2% of   103.76MiB at   2.10MiB/s ETA 00:48"
+// Returns pct, totalBytes, currentBytes, ok.
+func parseYtDlpProgress(line string) (pct float64, total, current int64, ok bool) {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "[download]") {
+		return
+	}
+	line = strings.TrimPrefix(line, "[download]")
+	line = strings.TrimSpace(line)
+
+	// Must contain "% of"
+	ofIdx := strings.Index(line, "% of")
+	if ofIdx < 0 {
+		return
+	}
+
+	pctStr := strings.TrimSpace(line[:ofIdx])
+	_, err := fmt.Sscanf(pctStr, "%f", &pct)
+	if err != nil {
+		return
+	}
+
+	// Parse total size after "of "
+	rest := strings.TrimSpace(line[ofIdx+4:])
+	// rest looks like "103.76MiB at ..."
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return
+	}
+	total = parseSizeStr(fields[0])
+	if total <= 0 {
+		return
+	}
+
+	current = int64(float64(total) * pct / 100)
+	ok = true
+	return
+}
+
+// parseSizeStr converts "103.76MiB", "45.2KiB", "1.2GiB" → bytes.
+func parseSizeStr(s string) int64 {
+	s = strings.ReplaceAll(s, ",", "")
+	var val float64
+	var unit string
+	fmt.Sscanf(s, "%f%s", &val, &unit)
+	unit = strings.ToLower(unit)
+	switch {
+	case strings.HasPrefix(unit, "gib") || strings.HasPrefix(unit, "gb"):
+		return int64(val * (1 << 30))
+	case strings.HasPrefix(unit, "mib") || strings.HasPrefix(unit, "mb"):
+		return int64(val * (1 << 20))
+	case strings.HasPrefix(unit, "kib") || strings.HasPrefix(unit, "kb"):
+		return int64(val * (1 << 10))
+	default:
+		return int64(val)
+	}
 }
 
 // chunkedDownload downloads a file using parallel HTTP range requests.

@@ -25,7 +25,13 @@ func (b *Bar) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func (b *Bar) render() {
+// Set forces the bar to a specific byte position (used when parsing external progress).
+func (b *Bar) Set(current int64) {
+	b.current.Store(current)
+	b.render()
+}
+
+
 	current := b.current.Load()
 
 	// Throttle — only redraw every 50KB

@@ -70,14 +70,14 @@ func (b *Bar) render() {
 
 func (b *Bar) Finish() {
 	if !b.finished.CompareAndSwap(false, true) {
-		return // already finished
+		return
 	}
 	if b.total > 0 {
-		filled := 30
-		bar := strings.Repeat("█", filled)
-		fmt.Printf("\r  \033[32m[%s]\033[0m  %s ✓\n", bar, formatBytes(b.total))
+		bar := strings.Repeat("█", 30)
+		// \033[2K clears the entire current line before rewriting it
+		fmt.Printf("\r\033[2K  \033[32m[%s]\033[0m  %s ✓\n", bar, formatBytes(b.total))
 	} else {
-		fmt.Println()
+		fmt.Printf("\r\033[2K\n")
 	}
 }
 

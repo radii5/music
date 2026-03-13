@@ -58,6 +58,7 @@ public static class ChunkDownloader
 
     public static void Download(string url, string dest, int numThreads) {
         using (var client = new HttpClient()) {
+            client.Timeout = System.TimeSpan.FromMinutes(30);
             client.DefaultRequestHeaders.UserAgent.ParseAdd("radii5-installer");
 
             // HEAD to get total size
@@ -99,21 +100,37 @@ public static class ChunkDownloader
                 string tmp  = tmpFiles[i];
 
                 tasks[i] = Task.Run(async () => {
-                    try {
-                        var req = new HttpRequestMessage(HttpMethod.Get, url);
-                        req.Headers.Range = new RangeHeaderValue(start, end);
-                        var res    = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
-                        using (var rs = await res.Content.ReadAsStreamAsync())
-                        using (var fs = File.OpenWrite(tmp)) {
-                            var buf = new byte[65536];
-                            int n;
-                            while ((n = await rs.ReadAsync(buf, 0, buf.Length)) > 0) {
-                                fs.Write(buf, 0, n);
-                                Interlocked.Add(ref _downloaded, (long)n);
+                    const int maxRetries = 3;
+                    for (int attempt = 0; attempt < maxRetries; attempt++) {
+                        try {
+                            var req = new HttpRequestMessage(HttpMethod.Get, url);
+                            req.Headers.Range = new RangeHeaderValue(start, end);
+                            var res    = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+                            long chunkDownloaded = 0;
+                            using (var rs = await res.Content.ReadAsStreamAsync())
+                            using (var fs = File.OpenWrite(tmp)) {
+                                var buf = new byte[65536];
+                                int n;
+                                while ((n = await rs.ReadAsync(buf, 0, buf.Length)) > 0) {
+                                    fs.Write(buf, 0, n);
+                                    Interlocked.Add(ref _downloaded, (long)n);
+                                    chunkDownloaded += n;
+                                }
+                            }
+                            return; // success
+                        } catch (Exception ex) {
+                            if (attempt == maxRetries - 1)
+                                errors.Add(string.Format("chunk failed after {0} attempts: {1}", maxRetries, ex.Message));
+                            else {
+                                // reset progress counter and file before retry
+                                var fi = new FileInfo(tmp);
+                                if (fi.Exists) {
+                                    Interlocked.Add(ref _downloaded, -fi.Length);
+                                    fi.Delete();
+                                }
+                                await Task.Delay(500 * (attempt + 1));
                             }
                         }
-                    } catch (Exception ex) {
-                        errors.Add(ex.Message);
                     }
                 });
             }
@@ -151,7 +168,14 @@ function Get-GHRelease([string]$Repo) {
 }
 
 function Install-Binary([string]$Url, [string]$Dest) {
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
     [ChunkDownloader]::Download($Url, $Dest, $threads)
+    $sw.Stop()
+    $secs = $sw.Elapsed.TotalSeconds
+    $size = (Get-Item $Dest).Length
+    $mbps = [math]::Round(($size / 1MB) / $secs, 1)
+    $elapsed = [math]::Round($secs, 1)
+    Write-Host "  `e[2m${mbps} MB/s  (${elapsed}s,  threads)`e[0m"
 }
 
 # ── 1. radii5 ─────────────────────────────────────────────────────────────────

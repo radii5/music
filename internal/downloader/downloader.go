@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fatih/color"
@@ -128,7 +129,6 @@ func ytDlpDownload(url, format, outPath string) error {
 		"-x",
 		"--audio-format", format,
 		"--audio-quality", "0",
-		// Emit one progress line per update, no ANSI codes of its own
 		"--progress",
 		"--newline",
 		"--no-colors",
@@ -138,51 +138,57 @@ func ytDlpDownload(url, format, outPath string) error {
 
 	cmd := exec.Command("yt-dlp", args...)
 
-	// Capture stderr (yt-dlp writes progress there)
+	// yt-dlp writes progress to stdout, warnings/errors to stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return err
 	}
-	// Suppress stdout (redundant info lines)
-	cmd.Stdout = nil
 
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 
-	// Parse yt-dlp progress lines and drive our bar.
-	// Lines look like:  [download]  12.3% of 103.76MiB at 2.10MiB/s ETA 00:48
 	var bar *progress.Bar
-	scanner := bufio.NewScanner(stderr)
-	for scanner.Scan() {
-		line := scanner.Text()
+	var barMu sync.Mutex
 
-		pct, total, current, ok := parseYtDlpProgress(line)
-		if !ok {
-			// Not a progress line — suppress noisy yt-dlp info lines,
-			// but surface warnings/errors
-			if strings.Contains(line, "WARNING") || strings.Contains(line, "ERROR") {
-				fmt.Fprintf(os.Stderr, "\n  %s\n", color.YellowString(line))
+	scanPipe := func(r io.Reader, isStderr bool) {
+		scanner := bufio.NewScanner(r)
+		for scanner.Scan() {
+			line := scanner.Text()
+			pct, total, current, ok := parseYtDlpProgress(line)
+			if !ok {
+				if isStderr && (strings.Contains(line, "WARNING") || strings.Contains(line, "ERROR")) {
+					fmt.Fprintf(os.Stderr, "\n  %s\n", color.YellowString(line))
+				}
+				continue
 			}
-			continue
-		}
-
-		if bar == nil {
-			bar = progress.NewBar(total)
-		}
-		// Sync bar's internal counter to the parsed byte position
-		bar.Set(current)
-
-		if pct >= 100 {
-			bar.Finish()
+			barMu.Lock()
+			if bar == nil {
+				bar = progress.NewBar(total)
+			}
+			bar.Set(current)
+			if pct >= 100 {
+				bar.Finish()
+			}
+			barMu.Unlock()
 		}
 	}
 
-	if bar == nil {
-		// yt-dlp gave no progress lines (e.g. already downloaded) — just finish
-	} else if bar != nil {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); scanPipe(stdout, false) }()
+	go func() { defer wg.Done(); scanPipe(stderr, true) }()
+	wg.Wait()
+
+	barMu.Lock()
+	if bar != nil {
 		bar.Finish()
 	}
+	barMu.Unlock()
 
 	return cmd.Wait()
 }

@@ -74,10 +74,9 @@ func (b *Bar) Finish() {
 	}
 	if b.total > 0 {
 		bar := strings.Repeat("█", 30)
-		// \033[2K clears the entire current line before rewriting it
-		fmt.Printf("\r\033[2K  \033[32m[%s]\033[0m  %s ✓\n", bar, formatBytes(b.total))
+		fmt.Printf("\r  \033[32m[%s]\033[0m  %s ✓%-10s\n", bar, formatBytes(b.total), "")
 	} else {
-		fmt.Printf("\r\033[2K\n")
+		fmt.Printf("\r%-60s\n", "")
 	}
 }
 

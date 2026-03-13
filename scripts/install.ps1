@@ -4,7 +4,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$repo      = "radii5/radii5"
+$repo      = "radii5/music"
 $installDir = "$env:LOCALAPPDATA\radii5"
 
 # ── arch detection ────────────────────────────────────────────────────────────

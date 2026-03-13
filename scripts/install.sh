@@ -3,7 +3,7 @@
 # Usage:  curl -fsSL https://raw.githubusercontent.com/radii5/radii5/main/scripts/install.sh | sh
 set -e
 
-REPO="radii5/radii5"
+REPO="radii5/music"
 INSTALL_DIR="/usr/local/bin"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')

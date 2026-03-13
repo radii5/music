@@ -2,39 +2,38 @@
 
 **Fast music downloader — built for speed, not bloat.**
 
-Downloads audio from YouTube, SoundCloud, Bandcamp, and 1000+ other sites. Uses parallel chunk downloading for maximum speed and automatically writes proper ID3 tags to your files.
+Downloads audio from YouTube, YouTube Music, SoundCloud, Bandcamp, and 1000+ other sites. Parallel chunk downloading, automatic ID3 tagging, and a clean one-line install.
 
 ---
 
 ## Install
 
-### Linux / macOS — one line
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/radii5/radii5/main/scripts/install.sh | sh
-```
-
 ### Windows — PowerShell
 
 ```powershell
-irm https://raw.githubusercontent.com/radii5/radii5/main/scripts/install.ps1 | iex
+irm https://radii5.github.io/music/install.ps1 | iex
 ```
 
-### Cross-platform — Go runner
+Installs **radii5**, **yt-dlp**, **ffmpeg**, and **deno** automatically. Adds everything to your PATH — no manual setup needed.
 
-If you already have Go installed, `install.go` uses the same chunked parallel downloader as radii5 itself — no shell or PowerShell needed:
+### Linux / macOS
 
 ```sh
-go run https://raw.githubusercontent.com/radii5/radii5/main/install.go
-# or after cloning:
-go run install.go
+curl -fsSL https://raw.githubusercontent.com/radii5/music/main/scripts/install.sh | sh
 ```
 
-All three methods automatically download **both** yt-dlp and radii5 at their latest versions. yt-dlp is skipped if it's already on your PATH.
+> **Note:** yt-dlp and ffmpeg must be on your PATH. Install them first:
+> ```sh
+> # macOS
+> brew install yt-dlp ffmpeg
+>
+> # Linux
+> pip install yt-dlp && sudo apt install ffmpeg
+> ```
 
 ### Manual
 
-Download the binary for your platform from [Releases](https://github.com/radii5/radii5/releases):
+Download the binary for your platform from [Releases](https://github.com/radii5/music/releases):
 
 | Platform            | File                          |
 |---------------------|-------------------------------|
@@ -54,8 +53,8 @@ sudo mv radii5-linux-amd64 /usr/local/bin/radii5
 
 ```sh
 # requires Go 1.22+  →  https://go.dev/dl/
-git clone https://github.com/radii5/radii5.git
-cd radii5
+git clone https://github.com/radii5/music.git
+cd music
 go build -o radii5 .
 sudo mv radii5 /usr/local/bin/   # Linux/macOS
 ```
@@ -72,52 +71,69 @@ radii5 <url>
 # Download a YouTube track as MP3 (default)
 radii5 https://www.youtube.com/watch?v=...
 
-# Download as FLAC
-radii5 https://soundcloud.com/artist/track --format flac
+# Download from YouTube Music
+radii5 https://music.youtube.com/watch?v=...
+
+# Download as a different format
+radii5 <url> --format flac
 
 # Save to a custom directory
 radii5 <url> --output ~/Music/downloads
 
-# Use more parallel threads for faster downloads
+# Use more parallel download threads
 radii5 <url> --threads 16
 ```
 
-> **Windows / PowerShell tip:** If your URL contains `&` (e.g. `&list=...`), wrap it in quotes — otherwise PowerShell splits it:
+Files are saved to `~/Music/radii5 downloads` by default.
+
+> **Windows / PowerShell tip:** If your URL contains `&` (e.g. `&list=...`), either wrap it in quotes or remove everything after the video ID:
 > ```powershell
 > # ✗ breaks — PowerShell treats & as a command separator
 > radii5 https://music.youtube.com/watch?v=abc123&list=xyz
 >
-> # ✓ works
+> # ✓ quoted
 > radii5 "https://music.youtube.com/watch?v=abc123&list=xyz"
+>
+> # ✓ trimmed (simpler)
+> radii5 https://music.youtube.com/watch?v=abc123
 > ```
 
 ### Flags
 
-| Flag             | Short | Default                    | Description                                         |
-|------------------|-------|----------------------------|-----------------------------------------------------|
-| `--format <fmt>` | `-f`  | `mp3`                      | Output format (`mp3`, `flac`, `wav`, `m4a`, `opus`) |
-| `--output <dir>` | `-o`  | `~/Music/radii5 downloads` | Output directory                                    |
-| `--threads <n>`  | `-t`  | `8`                        | Parallel download chunks                            |
-| `--version`      | `-v`  |                            | Print version and exit                              |
-| `--help`         | `-h`  |                            | Show usage                                          |
+| Flag             | Short | Default                    | Description              |
+|------------------|-------|----------------------------|--------------------------|
+| `--format <fmt>` | `-f`  | `mp3`                      | Output format (see below)|
+| `--output <dir>` | `-o`  | `~/Music/radii5 downloads` | Output directory         |
+| `--threads <n>`  | `-t`  | `8`                        | Parallel download chunks |
+| `--version`      | `-v`  |                            | Print version and exit   |
+| `--help`         | `-h`  |                            | Show usage               |
 
 ---
 
 ## Features
 
-- **Parallel downloading** — splits files into chunks and fetches them concurrently
+- **Parallel downloading** — splits files into 8 concurrent chunks for faster downloads when the source supports range requests
 - **ID3 tag writing** — automatically embeds title, artist, album, and cover art into MP3s
 - **1000+ supported sites** — anything yt-dlp supports, radii5 supports
 - **Zero config** — sensible defaults out of the box
-- **Single binary** — no runtime dependencies beyond yt-dlp
+- **Single binary** — one executable, no runtime to manage
 
 ---
 
 ## Supported formats
 
-`mp3` · `flac` · `wav` · `m4a` · `opus` · `aac` · `vorbis`
+`mp3` · `flac` · `m4a` · `opus` · `aac`
 
 Any format supported by yt-dlp's `--audio-format` flag will work.
+
+---
+
+## Requirements
+
+- **yt-dlp** — for resolving URLs and extracting audio streams
+- **ffmpeg** — for audio conversion (e.g. webm → mp3)
+
+The Windows installer handles both automatically. On Linux/macOS, install them manually (see above).
 
 ---
 

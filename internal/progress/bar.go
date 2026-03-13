@@ -65,7 +65,7 @@ func (b *Bar) render() {
 		speed = fmt.Sprintf("  %s", formatBytes(current))
 	}
 
-	fmt.Printf("\r  \033[36m[%s]\033[0m%s", bar, speed)
+	fmt.Printf("\r  \033[36m[%s]\033[0m%s\033[K", bar, speed)
 }
 
 func (b *Bar) Finish() {

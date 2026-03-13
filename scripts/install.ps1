@@ -318,6 +318,48 @@ if ($curPath -notlike "*$installDir*") {
     Write-Host "  `e[2m✓ $installDir already in PATH`e[0m"
 }
 
+# ── 6. PowerShell profile wrapper ─────────────────────────────────────────────
+# Installs a 'radii5' function in the user's PowerShell profile so that
+# unquoted URLs with & params (e.g. &list=...) are handled automatically.
+$profileDir = Split-Path $PROFILE -Parent
+if (-not (Test-Path $profileDir)) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }
+
+$wrapper = @'
+
+# radii5 wrapper — handles unquoted YouTube URLs with & params
+function radii5 {
+    # Rejoin all args into a single string, then extract the URL
+    # This captures fragments that PowerShell split on & characters
+    $allArgs = $args -join " "
+
+    # Find the URL (starts with http)
+    $urlMatch = [regex]::Match($allArgs, 'https?://\S+')
+    if ($urlMatch.Success) {
+        $url = $urlMatch.Value
+        # Strip everything after the video ID for YouTube/YT Music
+        if ($url -match '(https?://(?:music\.)?youtube\.com/watch\?v=[^&\s]+)') {
+            $url = $matches[1]
+        }
+        # Replace URL in args with cleaned version
+        $allArgs = $allArgs -replace 'https?://\S+', $url
+    }
+
+    $exe = "$env:LOCALAPPDATA\radii5\radii5.exe"
+    & $exe ($allArgs -split ' ' | Where-Object { $_ -ne '' })
+}
+
+'@
+
+# Only add if not already present
+if (-not (Test-Path $PROFILE) -or -not (Select-String -Path $PROFILE -Pattern "radii5 wrapper" -Quiet)) {
+    Add-Content -Path $PROFILE -Value $wrapper
+    Write-Host "  `e[32m✓`e[0m Added radii5 shell wrapper to PowerShell profile"
+    Write-Host "  `e[2m(handles unquoted YouTube URLs with &list= etc.)`e[0m"
+} else {
+    Write-Host "  `e[2m✓ radii5 shell wrapper already in profile`e[0m"
+}
+Write-Host ""
+
 Write-Host ""
 Write-Host "  `e[1m`e[32mAll done!`e[0m  Try: radii5 --version"
 Write-Host ""

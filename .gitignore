@@ -1,0 +1,21 @@
+# Binaries
+radii5
+radii5.exe
+radii5-*
+
+# Build output
+dist/
+
+# Go
+*.test
+*.out
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

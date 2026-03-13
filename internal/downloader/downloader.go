@@ -411,6 +411,24 @@ func convertAudio(input, output, format string) error {
 }
 
 func cleanURL(raw string) string {
+	// Keep only the v= parameter for YouTube/YT Music URLs, drop everything else
+	// e.g. &list=..., &si=..., &index=..., ?si=... etc.
+	for _, prefix := range []string{"youtube.com/watch", "music.youtube.com/watch"} {
+		if strings.Contains(raw, prefix) {
+			if idx := strings.Index(raw, "?"); idx != -1 {
+				base := raw[:idx]
+				query := raw[idx+1:]
+				// Extract only v=
+				for _, part := range strings.Split(query, "&") {
+					if strings.HasPrefix(part, "v=") {
+						return base + "?" + part
+					}
+				}
+			}
+			return raw
+		}
+	}
+	// Non-YouTube URLs: just strip known tracking params
 	for _, param := range []string{"?si=", "&si="} {
 		if idx := strings.Index(raw, param); idx != -1 {
 			raw = raw[:idx]

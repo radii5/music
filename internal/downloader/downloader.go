@@ -34,54 +34,28 @@ type Info struct {
 
 // Download orchestrates the full download pipeline for a given URL.
 func Download(url, format, outputDir string, threads int) error {
-	// Ensure output directory exists
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf("creating output dir: %w", err)
 	}
-
-	// Check yt-dlp is available
 	if err := checkYtDlp(); err != nil {
 		return err
 	}
 
 	color.New(color.FgCyan, color.Bold).Printf("  Fetching info...\n")
 
-	info, err := fetchInfo(url, format)
+	// Single yt-dlp call: fetch metadata AND download in one pass.
+	// --print fires before download starts, giving us title/uploader for display.
+	info, err := ytDlpDownloadWithInfo(url, format, outputDir, threads)
 	if err != nil {
-		return fmt.Errorf("fetching info: %w", err)
-	}
-
-	filename := sanitizeFilename(info.Title) + "." + format
-	outPath := filepath.Join(outputDir, filename)
-
-	color.New(color.FgWhite, color.Bold).Printf("  %s\n", info.Title)
-	if info.Uploader != "" {
-		color.New(color.FgHiBlack).Printf("  %s\n", info.Uploader)
-	}
-	fmt.Println()
-
-	// Prefer chunked direct download if we have a direct URL, otherwise fall
-	// back to yt-dlp for format conversion (e.g. mp3 from a webm source).
-	if info.URL != "" && info.Ext == format {
-		size := info.Filesize
-		if size == 0 {
-			size = info.FilesizeApprox
-		}
-		if err := chunkedDownload(info.URL, outPath, size, threads); err != nil {
-			return fmt.Errorf("downloading: %w", err)
-		}
-	} else {
-		if err := ytDlpDownload(url, format, outPath); err != nil {
-			return fmt.Errorf("yt-dlp download: %w", err)
-		}
+		return fmt.Errorf("yt-dlp download: %w", err)
 	}
 
 	// Write ID3 tags for MP3
-	if format == "mp3" {
+	if format == "mp3" && info != nil {
+		outPath := filepath.Join(outputDir, sanitizeFilename(info.Title)+"."+format)
 		_ = metadata.WriteMP3Tags(outPath, info.Title, info.Uploader, info.Album, info.Thumbnail)
 	}
 
-	color.New(color.FgGreen).Printf("  Saved → %s\n", outPath)
 	return nil
 }
 
@@ -121,9 +95,11 @@ func fetchInfo(url, format string) (*Info, error) {
 	return &info, nil
 }
 
-// ytDlpDownload delegates to yt-dlp when format conversion is required.
-// It parses yt-dlp's progress output and renders it using our own bar.
-func ytDlpDownload(url, format, outPath string) error {
+// ytDlpDownloadWithInfo runs a single yt-dlp invocation that prints metadata
+// before downloading, so we only hit YouTube's API once instead of twice.
+func ytDlpDownloadWithInfo(url, format, outputDir string, threads int) (*Info, error) {
+	outTmpl := filepath.Join(outputDir, "%(title)s.%(ext)s")
+
 	args := []string{
 		"--no-playlist",
 		"-x",
@@ -132,52 +108,83 @@ func ytDlpDownload(url, format, outPath string) error {
 		"--progress",
 		"--newline",
 		"--no-colors",
-		"--concurrent-fragments", "8",
+		"--concurrent-fragments", fmt.Sprintf("%d", threads),
 		"--js-runtimes", "deno",
-		"-o", outPath,
+		// Print JSON metadata to stdout before downloading
+		"--print", "%()j",
+		"-o", outTmpl,
 		url,
 	}
 
 	cmd := exec.Command("yt-dlp", args...)
-
-	// yt-dlp writes progress to stdout, warnings/errors to stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return err
+		return nil, err
 	}
-
 	if err := cmd.Start(); err != nil {
-		return err
+		return nil, err
 	}
 
+	var info *Info
 	var bar *progress.Bar
 	var barMu sync.Mutex
 	var barOnce sync.Once
+	var metaPrinted bool
 
 	scanPipe := func(r io.Reader, isStderr bool) {
 		scanner := bufio.NewScanner(r)
+		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
-			pct, total, current, ok := parseYtDlpProgress(line)
-			if !ok {
-				if isStderr && (strings.Contains(line, "WARNING") || strings.Contains(line, "ERROR")) {
-					fmt.Fprintf(os.Stderr, "\n  %s\n", color.YellowString(line))
+
+			// First non-empty stdout line is the JSON metadata from --print
+			if !isStderr && info == nil && len(line) > 0 && line[0] == '{' {
+				var parsed Info
+				if json.Unmarshal([]byte(line), &parsed) == nil {
+					info = &parsed
+					// Clear "Fetching info..." and print track details
+					fmt.Printf("\r\033[K")
+					color.New(color.FgWhite, color.Bold).Printf("  %s\n", info.Title)
+					if info.Uploader != "" {
+						color.New(color.FgHiBlack).Printf("  %s\n", info.Uploader)
+					}
+					fmt.Println()
+					metaPrinted = true
 				}
 				continue
 			}
-			barMu.Lock()
-			if bar == nil {
-				bar = progress.NewBar(total)
+
+			// Progress lines
+			pct, total, current, ok := parseYtDlpProgress(line)
+			if ok {
+				barMu.Lock()
+				if bar == nil {
+					bar = progress.NewBar(total)
+				}
+				bar.Set(current)
+				if pct >= 100 {
+					barOnce.Do(func() {
+						bar.Finish()
+						if info != nil {
+							outPath := filepath.Join(outputDir, sanitizeFilename(info.Title)+"."+format)
+							color.New(color.FgGreen).Printf("  Saved → %s\n", outPath)
+						}
+					})
+				}
+				barMu.Unlock()
+				continue
 			}
-			bar.Set(current)
-			if pct >= 100 {
-				barOnce.Do(func() { bar.Finish() })
+
+			// Warnings/errors
+			if isStderr {
+				if strings.Contains(line, "WARNING") || strings.Contains(line, "ERROR") {
+					fmt.Fprintf(os.Stderr, "  %s\n", color.YellowString(line))
+				}
 			}
-			barMu.Unlock()
 		}
 	}
 
@@ -189,11 +196,20 @@ func ytDlpDownload(url, format, outPath string) error {
 
 	barMu.Lock()
 	if bar != nil {
-		barOnce.Do(func() { bar.Finish() })
+		barOnce.Do(func() {
+			bar.Finish()
+			if info != nil {
+				outPath := filepath.Join(outputDir, sanitizeFilename(info.Title)+"."+format)
+				color.New(color.FgGreen).Printf("  Saved → %s\n", outPath)
+			}
+		})
+	} else if !metaPrinted {
+		// Already downloaded or no progress output — just clear the fetching line
+		fmt.Printf("\r\033[K")
 	}
 	barMu.Unlock()
 
-	return cmd.Wait()
+	return info, cmd.Wait()
 }
 
 // parseYtDlpProgress parses a yt-dlp progress line.

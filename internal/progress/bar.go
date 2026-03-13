@@ -8,9 +8,10 @@ import (
 
 // Bar is a thread-safe progress bar that tracks downloaded bytes
 type Bar struct {
-	total     int64
-	current   atomic.Int64
+	total    int64
+	current  atomic.Int64
 	lastPrint int64
+	finished atomic.Bool
 }
 
 func NewBar(total int64) *Bar {
@@ -20,15 +21,19 @@ func NewBar(total int64) *Bar {
 // Write implements io.Writer so it can be used with TeeReader
 func (b *Bar) Write(p []byte) (int, error) {
 	n := len(p)
-	b.current.Add(int64(n))
-	b.render()
+	if !b.finished.Load() {
+		b.current.Add(int64(n))
+		b.render()
+	}
 	return n, nil
 }
 
 // Set forces the bar to a specific byte position (used when parsing external progress).
 func (b *Bar) Set(current int64) {
-	b.current.Store(current)
-	b.render()
+	if !b.finished.Load() {
+		b.current.Store(current)
+		b.render()
+	}
 }
 
 func (b *Bar) render() {
@@ -64,6 +69,9 @@ func (b *Bar) render() {
 }
 
 func (b *Bar) Finish() {
+	if !b.finished.CompareAndSwap(false, true) {
+		return // already finished
+	}
 	if b.total > 0 {
 		filled := 30
 		bar := strings.Repeat("█", filled)

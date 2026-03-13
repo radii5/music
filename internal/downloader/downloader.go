@@ -132,6 +132,7 @@ func ytDlpDownload(url, format, outPath string) error {
 		"--progress",
 		"--newline",
 		"--no-colors",
+		"--concurrent-fragments", "8",
 		"--js-runtimes", "deno",
 		"-o", outPath,
 		url,

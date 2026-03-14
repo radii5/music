@@ -9,6 +9,8 @@
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev)
 [![Platform](https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-lightgrey?style=flat)](https://github.com/radii5/music/releases)
 
+![demo](assets/demo.gif)
+
 </div>
 
 ---

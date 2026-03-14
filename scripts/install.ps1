@@ -19,7 +19,7 @@ Write-Host ""
 
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
-# ── compile C# downloader (uses HttpClient — no obsolete WebRequest) ──────────
+# ── compile C# downloader ─────────────────────────────────────────────────────
 if (-not ([System.Management.Automation.PSTypeName]'ChunkDownloader').Type) {
 Add-Type -Language CSharp @"
 using System;
@@ -62,7 +62,6 @@ public static class ChunkDownloader
             client.Timeout = System.TimeSpan.FromMinutes(30);
             client.DefaultRequestHeaders.UserAgent.ParseAdd("radii5-installer");
 
-            // HEAD to get total size
             long total = 0;
             try {
                 var headReq = new HttpRequestMessage(HttpMethod.Head, url);
@@ -74,7 +73,6 @@ public static class ChunkDownloader
             _total      = total;
 
             if (total <= 0 || numThreads <= 1) {
-                // Simple streaming fallback
                 using (var rs = client.GetStreamAsync(url).GetAwaiter().GetResult())
                 using (var fs = File.OpenWrite(dest)) {
                     var buf = new byte[65536];
@@ -118,12 +116,11 @@ public static class ChunkDownloader
                                     chunkDownloaded += n;
                                 }
                             }
-                            return; // success
+                            return;
                         } catch (Exception ex) {
                             if (attempt == maxRetries - 1)
                                 errors.Add(string.Format("chunk failed after {0} attempts: {1}", maxRetries, ex.Message));
                             else {
-                                // reset progress counter and file before retry
                                 var fi = new FileInfo(tmp);
                                 if (fi.Exists) {
                                     Interlocked.Add(ref _downloaded, -fi.Length);
@@ -136,7 +133,6 @@ public static class ChunkDownloader
                 });
             }
 
-            // Poll bar while tasks run
             while (!Task.WhenAll(tasks).Wait(80)) {
                 DrawBar(_downloaded, total);
             }
@@ -149,7 +145,6 @@ public static class ChunkDownloader
                 throw new Exception("Chunk failed: " + msg);
             }
 
-            // Assemble chunks in order
             using (var fs = File.OpenWrite(dest)) {
                 foreach (var tmp in tmpFiles) {
                     byte[] bytes = File.ReadAllBytes(tmp);
@@ -173,11 +168,11 @@ function Install-Binary([string]$Url, [string]$Dest) {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     [ChunkDownloader]::Download($Url, $Dest, $threads)
     $sw.Stop()
-    $secs = $sw.Elapsed.TotalSeconds
-    $size = (Get-Item $Dest).Length
-    $mbps = [math]::Round(($size / 1MB) / $secs, 1)
+    $secs    = $sw.Elapsed.TotalSeconds
+    $size    = (Get-Item $Dest).Length
+    $mbps    = [math]::Round(($size / 1MB) / $secs, 1)
     $elapsed = [math]::Round($secs, 1)
-    Write-Host "  `e[2m${mbps} MB/s  (${elapsed}s,  threads)`e[0m"
+    Write-Host "  `e[2m${mbps} MB/s  (${elapsed}s,  $threads threads)`e[0m"
 }
 
 # ── 1. radii5 ─────────────────────────────────────────────────────────────────

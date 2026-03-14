@@ -48,13 +48,13 @@ public static class ChunkDownloader
         string bar = new string('\u2588', filled) + new string('\u2591', BarWidth - filled);
         string line = string.Format("  \u001b[36m[{0}]\u001b[0m  {1} / {2}  ({3}%)",
             bar, FmtBytes(cur), FmtBytes(tot), pct);
-        Console.Write("\r" + line.PadRight(72));
+        Console.Write("\r" + line + "\u001b[K");
     }
 
     static void DrawBarDone(long tot) {
         string bar  = new string('\u2588', BarWidth);
         string line = string.Format("  \u001b[32m[{0}]\u001b[0m  {1} \u2713", bar, FmtBytes(tot));
-        Console.Write("\r" + line.PadRight(72) + "\n");
+        Console.Write("\r" + line + "\u001b[K\n");
     }
 
     public static void Download(string url, string dest, int numThreads) {

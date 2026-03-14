@@ -141,6 +141,20 @@ func Download(url, format, outputDir string, threads int) error {
 
 		elapsed := time.Since(start)
 
+		// Print speed summary
+		var size64 int64
+		if fi, err := os.Stat(tmpFile); err == nil {
+			size64 = fi.Size()
+		}
+		if size64 > 0 && elapsed.Seconds() > 0 {
+			mbps := float64(size64) / (1 << 20) / elapsed.Seconds()
+			if supportsRange && size > 0 && threads > 1 {
+				color.New(color.FgHiBlack).Printf("  %.1f MB/s  (%.1fs,  %d threads)\n", mbps, elapsed.Seconds(), threads)
+			} else {
+				color.New(color.FgHiBlack).Printf("  %.1f MB/s  (%.1fs)\n", mbps, elapsed.Seconds())
+			}
+		}
+
 		if format != info.Ext {
 			cyan.Print("\n  → Converting to " + strings.ToUpper(format) + "...")
 			if err := convertAudio(tmpFile, outFile, format); err != nil {

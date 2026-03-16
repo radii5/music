@@ -26,8 +26,7 @@ if (-not ([System.Management.Automation.PSTypeName]'ChunkDownloader').Type) {
 Add-Type -Language CSharp -ReferencedAssemblies @(
     'System.Net.Http',
     'System.Threading.Tasks',
-    'System.Collections',
-    ([System.AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.FullName -like 'System.Collections.Concurrent*' } | Select-Object -First 1).Location
+    'System.Collections.Concurrent'
 ) @"
 using System;
 using System.IO;

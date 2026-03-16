@@ -23,7 +23,11 @@ New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 # ── compile C# downloader ─────────────────────────────────────────────────────
 Add-Type -AssemblyName System.Net.Http
 if (-not ([System.Management.Automation.PSTypeName]'ChunkDownloader').Type) {
+$netFxDir = [System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
 Add-Type -Language CSharp -ReferencedAssemblies @(
+    'mscorlib',
+    'System',
+    'System.Net',
     'System.Net.Http',
     'System.Threading.Tasks',
     'System.Collections.Concurrent'
@@ -64,7 +68,7 @@ public static class ChunkDownloader
     }
 
     public static void Download(string url, string dest, int numThreads) {
-        ServicePointManager.SecurityProtocol = (System.Net.SecurityProtocolType)3072; // TLS 1.2
+        System.Net.ServicePointManager.SecurityProtocol = (System.Net.SecurityProtocolType)3072; // TLS 1.2
         using (var client = new HttpClient()) {
             client.Timeout = System.TimeSpan.FromMinutes(30);
             client.DefaultRequestHeaders.UserAgent.ParseAdd("radii5-installer");
@@ -183,48 +187,48 @@ function Install-Binary([string]$Url, [string]$Dest) {
 }
 
 # ── 1. radii5 ─────────────────────────────────────────────────────────────────
-Write-Host "  $esc[36m→$esc[0m  radii5"
+Write-Host "  $esc[36m>$esc[0m  radii5"
 try   { $rel = Get-GHRelease $repo }
-catch { Write-Host "  $esc[31m✗$esc[0m Could not fetch radii5 release. Is the repo published and tagged?" -ForegroundColor Red; exit 1 }
+catch { Write-Host "  $esc[31mFAIL$esc[0m Could not fetch radii5 release. Is the repo published and tagged?" -ForegroundColor Red; exit 1 }
 
 $assetName = "radii5-$suffix.exe"
 $asset = $rel.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
-if (-not $asset) { Write-Host "  $esc[31m✗$esc[0m No asset '$assetName' found in release $($rel.tag_name)" -ForegroundColor Red; exit 1 }
+if (-not $asset) { Write-Host "  $esc[31mFAIL$esc[0m No asset '$assetName' found in release $($rel.tag_name)" -ForegroundColor Red; exit 1 }
 
 $r5Dest = Join-Path $installDir "radii5.exe"
 Write-Host "  $esc[2mversion$esc[0m  $($rel.tag_name)"
 Write-Host "  $esc[2mdest   $esc[0m  $r5Dest"
 Write-Host ""
 Install-Binary -Url $asset.browser_download_url -Dest $r5Dest
-Write-Host "  $esc[32m✓$esc[0m radii5 $($rel.tag_name)"
+Write-Host "  $esc[32mOK$esc[0m radii5 $($rel.tag_name)"
 Write-Host ""
 
 # ── 2. yt-dlp ─────────────────────────────────────────────────────────────────
 if (Get-Command "yt-dlp.exe" -ErrorAction SilentlyContinue) {
-    Write-Host "  $esc[2m✓ yt-dlp already installed$esc[0m"
+    Write-Host "  $esc[2mOK yt-dlp already installed$esc[0m"
     Write-Host ""
 } else {
-    Write-Host "  $esc[36m→$esc[0m  yt-dlp"
+    Write-Host "  $esc[36m>$esc[0m  yt-dlp"
     $ytRel   = Get-GHRelease "yt-dlp/yt-dlp"
     $ytAsset = $ytRel.assets | Where-Object { $_.name -eq "yt-dlp.exe" } | Select-Object -First 1
-    if (-not $ytAsset) { Write-Host "  $esc[31m✗$esc[0m yt-dlp.exe not found" -ForegroundColor Red; exit 1 }
+    if (-not $ytAsset) { Write-Host "  $esc[31mFAIL$esc[0m yt-dlp.exe not found" -ForegroundColor Red; exit 1 }
 
     $ytDest = Join-Path $installDir "yt-dlp.exe"
     Write-Host "  $esc[2mversion$esc[0m  $($ytRel.tag_name)"
     Write-Host "  $esc[2mdest   $esc[0m  $ytDest"
     Write-Host ""
     Install-Binary -Url $ytAsset.browser_download_url -Dest $ytDest
-    Write-Host "  $esc[32m✓$esc[0m yt-dlp $($ytRel.tag_name)"
+    Write-Host "  $esc[32mOK$esc[0m yt-dlp $($ytRel.tag_name)"
     Write-Host ""
 }
 
 # ── 3. ffmpeg ─────────────────────────────────────────────────────────────────
 $ffDest = Join-Path $installDir "ffmpeg.exe"
 if (Test-Path $ffDest) {
-    Write-Host "  $esc[2m✓ ffmpeg already installed$esc[0m"
+    Write-Host "  $esc[2mOK ffmpeg already installed$esc[0m"
     Write-Host ""
 } else {
-    Write-Host "  $esc[36m→$esc[0m  ffmpeg"
+    Write-Host "  $esc[36m>$esc[0m  ffmpeg"
     try {
         $ffRel   = Get-GHRelease "BtbN/FFmpeg-Builds"
         $ffAsset = $ffRel.assets |
@@ -260,10 +264,10 @@ if (Test-Path $ffDest) {
         }
         Remove-Item $ffTmp -Recurse -Force
 
-        Write-Host "  $esc[32m✓$esc[0m ffmpeg installed"
+        Write-Host "  $esc[32mOK$esc[0m ffmpeg installed"
         Write-Host ""
     } catch {
-        Write-Host "  $esc[33m⚠$esc[0m ffmpeg install failed: $_" -ForegroundColor Yellow
+        Write-Host "  $esc[33mWARN$esc[0m ffmpeg install failed: $_" -ForegroundColor Yellow
         Write-Host "  Install manually: https://ffmpeg.org/download.html"
         Write-Host ""
     }
@@ -272,10 +276,10 @@ if (Test-Path $ffDest) {
 # ── 4. deno ───────────────────────────────────────────────────────────────────
 $denoDest = Join-Path $installDir "deno.exe"
 if (Test-Path $denoDest) {
-    Write-Host "  $esc[2m✓ deno already installed$esc[0m"
+    Write-Host "  $esc[2mOK deno already installed$esc[0m"
     Write-Host ""
 } else {
-    Write-Host "  $esc[36m→$esc[0m  deno"
+    Write-Host "  $esc[36m>$esc[0m  deno"
     try {
         $denoRel   = Get-GHRelease "denoland/deno"
         $denoAsset = $denoRel.assets |
@@ -301,10 +305,10 @@ if (Test-Path $denoDest) {
         Copy-Item $denoExe.FullName -Destination $denoDest -Force
         Remove-Item $denoTmp -Recurse -Force
 
-        Write-Host "  $esc[32m✓$esc[0m deno $($denoRel.tag_name)"
+        Write-Host "  $esc[32mOK$esc[0m deno $($denoRel.tag_name)"
         Write-Host ""
     } catch {
-        Write-Host "  $esc[33m⚠$esc[0m deno install failed: $_" -ForegroundColor Yellow
+        Write-Host "  $esc[33mWARN$esc[0m deno install failed: $_" -ForegroundColor Yellow
         Write-Host "  Install manually: https://deno.com"
         Write-Host ""
     }
@@ -315,9 +319,9 @@ $curPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
 if ($curPath -notlike "*$installDir*") {
     [System.Environment]::SetEnvironmentVariable("PATH", "$curPath;$installDir", "User")
     $env:PATH = "$env:PATH;$installDir"
-    Write-Host "  $esc[32m✓$esc[0m Added $installDir to PATH"
+    Write-Host "  $esc[32mOK$esc[0m Added $installDir to PATH"
 } else {
-    Write-Host "  $esc[2m✓ $installDir already in PATH$esc[0m"
+    Write-Host "  $esc[2mOK $installDir already in PATH$esc[0m"
 }
 
 Write-Host ""

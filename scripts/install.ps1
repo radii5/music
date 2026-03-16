@@ -1,23 +1,5 @@
-﻿
-# radii5 installer for Windows
+﻿# radii5 installer for Windows
 # Usage: irm https://raw.githubusercontent.com/radii5/music/main/scripts/install.ps1 | iex
-# Enable ANSI/VT in CMD and PS5
-
-if ($host.Name -eq 'ConsoleHost') {
-    $kernel32 = Add-Type -MemberDefinition @"
-        [DllImport("kernel32.dll")]
-        public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
-        [DllImport("kernel32.dll")]
-        public static extern IntPtr GetStdHandle(int nStdHandle);
-        [DllImport("kernel32.dll")]
-        public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
-"@ -Name "Kernel32" -Namespace "Win32" -PassThru
-
-    $handle = $kernel32::GetStdHandle(-11)
-    $mode   = 0
-    $kernel32::GetConsoleMode($handle, [ref]$mode) | Out-Null
-    $kernel32::SetConsoleMode($handle, $mode -bor 4) | Out-Null
-}
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -39,11 +21,11 @@ New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
 # ── compile C# downloader ─────────────────────────────────────────────────────
 if (-not ([System.Management.Automation.PSTypeName]'ChunkDownloader').Type) {
-Add-Type -AssemblyName System.Net.Http
 Add-Type -Language CSharp @"
 using System;
 using System.IO;
-using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Concurrent;
@@ -63,102 +45,114 @@ public static class ChunkDownloader
     static void DrawBar(long cur, long tot) {
         int filled = (tot > 0) ? (int)Math.Min((double)cur / tot * BarWidth, BarWidth) : BarWidth / 2;
         int pct    = (tot > 0) ? (int)((double)cur / tot * 100) : 0;
-        string bar = new string('#', filled) + new string('-', BarWidth - filled);
-        string line = string.Format("  [{0}]  {1} / {2}  ({3}%)", bar, FmtBytes(cur), FmtBytes(tot), pct);
-        Console.Write("\r" + line);
+        string bar = new string('\u2588', filled) + new string('\u2591', BarWidth - filled);
+        string line = string.Format("  \u001b[36m[{0}]\u001b[0m  {1} / {2}  ({3}%)",
+            bar, FmtBytes(cur), FmtBytes(tot), pct);
+        Console.Write("\r" + line + "\u001b[K");
     }
 
     static void DrawBarDone(long tot) {
-        string bar  = new string('#', BarWidth);
-        string line = string.Format("  [{0}]  {1} done", bar, FmtBytes(tot));
-        Console.Write("\r" + line + "\n");
+        string bar  = new string('\u2588', BarWidth);
+        string line = string.Format("  \u001b[32m[{0}]\u001b[0m  {1} \u2713", bar, FmtBytes(tot));
+        Console.Write("\r" + line + "\u001b[K\n");
     }
 
     public static void Download(string url, string dest, int numThreads) {
-        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+        using (var client = new HttpClient()) {
+            client.Timeout = System.TimeSpan.FromMinutes(30);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("radii5-installer");
 
-        long total = 0;
-        try {
-            var req = (HttpWebRequest)WebRequest.Create(url);
-            req.Method = "HEAD";
-            req.UserAgent = "radii5-installer";
-            using (var res = (HttpWebResponse)req.GetResponse())
-                total = res.ContentLength;
-        } catch {}
+            long total = 0;
+            try {
+                var headReq = new HttpRequestMessage(HttpMethod.Head, url);
+                var headRes = client.SendAsync(headReq).GetAwaiter().GetResult();
+                total = headRes.Content.Headers.ContentLength ?? 0;
+            } catch {}
 
-        _downloaded = 0;
-        _total      = total;
+            _downloaded = 0;
+            _total      = total;
 
-        if (total <= 0 || numThreads <= 1) {
-            var wc = new WebClient();
-            wc.Headers["User-Agent"] = "radii5-installer";
-            wc.DownloadProgressChanged += (s, e) => {
-                _downloaded = e.BytesReceived;
-                DrawBar(_downloaded, total);
-            };
-            wc.DownloadFileCompleted += (s, e) => DrawBarDone(_downloaded);
-            wc.DownloadFileTaskAsync(new Uri(url), dest).GetAwaiter().GetResult();
-            return;
-        }
-
-        long chunkSize = total / numThreads;
-        var  tmpFiles  = new string[numThreads];
-        var  tasks     = new Task[numThreads];
-        var  errors    = new ConcurrentBag<string>();
-
-        for (int i = 0; i < numThreads; i++) {
-            tmpFiles[i] = Path.GetTempFileName();
-            long start  = (long)i * chunkSize;
-            long end    = (i == numThreads - 1) ? total - 1 : start + chunkSize - 1;
-            string tmp  = tmpFiles[i];
-            int    idx  = i;
-
-            tasks[i] = Task.Run(() => {
-                const int maxRetries = 3;
-                for (int attempt = 0; attempt < maxRetries; attempt++) {
-                    try {
-                        var req = (HttpWebRequest)WebRequest.Create(url);
-                        req.UserAgent = "radii5-installer";
-                        req.AddRange(start, end);
-                        using (var res  = (HttpWebResponse)req.GetResponse())
-                        using (var rs   = res.GetResponseStream())
-                        using (var fs   = File.OpenWrite(tmp)) {
-                            var buf = new byte[65536];
-                            int n;
-                            while ((n = rs.Read(buf, 0, buf.Length)) > 0) {
-                                fs.Write(buf, 0, n);
-                                Interlocked.Add(ref _downloaded, (long)n);
-                            }
-                        }
-                        return;
-                    } catch (Exception ex) {
-                        if (attempt == maxRetries - 1)
-                            errors.Add(string.Format("chunk failed: {0}", ex.Message));
-                        else {
-                            var fi = new FileInfo(tmp);
-                            if (fi.Exists) { Interlocked.Add(ref _downloaded, -fi.Length); fi.Delete(); }
-                            Thread.Sleep(500 * (attempt + 1));
-                        }
+            if (total <= 0 || numThreads <= 1) {
+                using (var rs = client.GetStreamAsync(url).GetAwaiter().GetResult())
+                using (var fs = File.OpenWrite(dest)) {
+                    var buf = new byte[65536];
+                    int n;
+                    while ((n = rs.Read(buf, 0, buf.Length)) > 0) {
+                        fs.Write(buf, 0, n);
+                        Interlocked.Add(ref _downloaded, n);
+                        DrawBar(_downloaded, total);
                     }
                 }
-            });
-        }
-
-        while (!Task.WhenAll(tasks).Wait(80))
-            DrawBar(_downloaded, total);
-        DrawBarDone(total);
-
-        if (!errors.IsEmpty) {
-            string msg; errors.TryTake(out msg);
-            throw new Exception("Chunk failed: " + msg);
-        }
-
-        using (var fs = File.OpenWrite(dest))
-            foreach (var tmp in tmpFiles) {
-                byte[] bytes = File.ReadAllBytes(tmp);
-                fs.Write(bytes, 0, bytes.Length);
-                File.Delete(tmp);
+                DrawBarDone(_downloaded);
+                return;
             }
+
+            long chunkSize = total / numThreads;
+            var  tmpFiles  = new string[numThreads];
+            var  tasks     = new Task[numThreads];
+            var  errors    = new ConcurrentBag<string>();
+
+            for (int i = 0; i < numThreads; i++) {
+                tmpFiles[i] = Path.GetTempFileName();
+                long start  = i * chunkSize;
+                long end    = (i == numThreads - 1) ? total - 1 : start + chunkSize - 1;
+                string tmp  = tmpFiles[i];
+
+                tasks[i] = Task.Run(async () => {
+                    const int maxRetries = 3;
+                    for (int attempt = 0; attempt < maxRetries; attempt++) {
+                        try {
+                            var req = new HttpRequestMessage(HttpMethod.Get, url);
+                            req.Headers.Range = new RangeHeaderValue(start, end);
+                            var res    = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+                            long chunkDownloaded = 0;
+                            using (var rs = await res.Content.ReadAsStreamAsync())
+                            using (var fs = File.OpenWrite(tmp)) {
+                                var buf = new byte[65536];
+                                int n;
+                                while ((n = await rs.ReadAsync(buf, 0, buf.Length)) > 0) {
+                                    fs.Write(buf, 0, n);
+                                    Interlocked.Add(ref _downloaded, (long)n);
+                                    chunkDownloaded += n;
+                                }
+                            }
+                            return;
+                        } catch (Exception ex) {
+                            if (attempt == maxRetries - 1)
+                                errors.Add(string.Format("chunk failed after {0} attempts: {1}", maxRetries, ex.Message));
+                            else {
+                                var fi = new FileInfo(tmp);
+                                if (fi.Exists) {
+                                    Interlocked.Add(ref _downloaded, -fi.Length);
+                                    fi.Delete();
+                                }
+                                await Task.Delay(500 * (attempt + 1));
+                            }
+                        }
+                    }
+                });
+            }
+
+            while (!Task.WhenAll(tasks).Wait(80)) {
+                DrawBar(_downloaded, total);
+            }
+            DrawBar(total, total);
+            DrawBarDone(total);
+
+            if (!errors.IsEmpty) {
+                string msg;
+                errors.TryTake(out msg);
+                throw new Exception("Chunk failed: " + msg);
+            }
+
+            using (var fs = File.OpenWrite(dest)) {
+                foreach (var tmp in tmpFiles) {
+                    byte[] bytes = File.ReadAllBytes(tmp);
+                    fs.Write(bytes, 0, bytes.Length);
+                    File.Delete(tmp);
+                }
+            }
+        }
     }
 }
 "@

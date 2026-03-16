@@ -1,5 +1,8 @@
-# radii5 installer — short URL entry point
+# radii5 installer - short URL entry point
 # Usage: irm https://radii5.github.io/music/install.ps1 | iex
-$url = "https://raw.githubusercontent.com/radii5/music/main/scripts/install.ps1"
-$script = (New-Object System.Net.WebClient).DownloadString($url)
-Invoke-Expression $script
+$raw = "https://raw.githubusercontent.com/radii5/music/main/scripts"
+if ($PSVersionTable.PSVersion.Major -le 5) {
+    Invoke-Expression (Invoke-RestMethod "$raw/install-ps5.ps1")
+} else {
+    Invoke-Expression (Invoke-RestMethod "$raw/install.ps1")
+}

@@ -1,6 +1,5 @@
-# radii5 installer
-# Usage: irm https://radii5.github.io/music/install.ps1 | iex
-irm https://raw.githubusercontent.com/radii5/music/main/scripts/install.ps1 | iex
+# radii5 installer for Windows
+# Usage: irm https://raw.githubusercontent.com/radii5/music/main/scripts/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -8,7 +7,6 @@ $ErrorActionPreference = "Stop"
 $repo       = "radii5/music"
 $installDir = "$env:LOCALAPPDATA\radii5"
 $threads    = 8
-$esc = [char]27
 
 # ── arch ──────────────────────────────────────────────────────────────────────
 $arch   = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
@@ -22,12 +20,8 @@ Write-Host ""
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
 # ── compile C# downloader ─────────────────────────────────────────────────────
-Add-Type -AssemblyName System.Net.Http
 if (-not ([System.Management.Automation.PSTypeName]'ChunkDownloader').Type) {
-Add-Type -Language CSharp -ReferencedAssemblies @(
-    'System.Net.Http',
-    'System.Threading.Tasks'
-) @"
+Add-Type -Language CSharp @"
 using System;
 using System.IO;
 using System.Net.Http;
@@ -132,7 +126,7 @@ public static class ChunkDownloader
                                     Interlocked.Add(ref _downloaded, -fi.Length);
                                     fi.Delete();
                                 }
-                                Thread.Sleep(500 * (attempt + 1));
+                                await Task.Delay(500 * (attempt + 1));
                             }
                         }
                     }
@@ -143,7 +137,7 @@ public static class ChunkDownloader
                 DrawBar(_downloaded, total);
             }
             DrawBar(total, total);
-            DrawBarDone(total); 
+            DrawBarDone(total);
 
             if (!errors.IsEmpty) {
                 string msg;
@@ -178,52 +172,52 @@ function Install-Binary([string]$Url, [string]$Dest) {
     $size    = (Get-Item $Dest).Length
     $mbps    = [math]::Round(($size / 1MB) / $secs, 1)
     $elapsed = [math]::Round($secs, 1)
-    Write-Host "  $esc[2m${mbps} MB/s  (${elapsed}s,  $threads threads)$esc[0m"
+    Write-Host "  `e[2m${mbps} MB/s  (${elapsed}s,  $threads threads)`e[0m"
 }
 
 # ── 1. radii5 ─────────────────────────────────────────────────────────────────
-Write-Host "  $esc[36m→$esc[0m  radii5"
+Write-Host "  `e[36m→`e[0m  radii5"
 try   { $rel = Get-GHRelease $repo }
-catch { Write-Host "  $esc[31m✗$esc[0m Could not fetch radii5 release. Is the repo published and tagged?" -ForegroundColor Red; exit 1 }
+catch { Write-Host "  `e[31m✗`e[0m Could not fetch radii5 release. Is the repo published and tagged?" -ForegroundColor Red; exit 1 }
 
 $assetName = "radii5-$suffix.exe"
 $asset = $rel.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
-if (-not $asset) { Write-Host "  $esc[31m✗$esc[0m No asset '$assetName' found in release $($rel.tag_name)" -ForegroundColor Red; exit 1 }
+if (-not $asset) { Write-Host "  `e[31m✗`e[0m No asset '$assetName' found in release $($rel.tag_name)" -ForegroundColor Red; exit 1 }
 
 $r5Dest = Join-Path $installDir "radii5.exe"
-Write-Host "  $esc[2mversion$esc[0m  $($rel.tag_name)"
-Write-Host "  $esc[2mdest   $esc[0m  $r5Dest"
+Write-Host "  `e[2mversion`e[0m  $($rel.tag_name)"
+Write-Host "  `e[2mdest   `e[0m  $r5Dest"
 Write-Host ""
 Install-Binary -Url $asset.browser_download_url -Dest $r5Dest
-Write-Host "  $esc[32m✓$esc[0m radii5 $($rel.tag_name)"
+Write-Host "  `e[32m✓`e[0m radii5 $($rel.tag_name)"
 Write-Host ""
 
 # ── 2. yt-dlp ─────────────────────────────────────────────────────────────────
 if (Get-Command "yt-dlp.exe" -ErrorAction SilentlyContinue) {
-    Write-Host "  $esc[2m✓ yt-dlp already installed$esc[0m"
+    Write-Host "  `e[2m✓ yt-dlp already installed`e[0m"
     Write-Host ""
 } else {
-    Write-Host "  $esc[36m→$esc[0m  yt-dlp"
+    Write-Host "  `e[36m→`e[0m  yt-dlp"
     $ytRel   = Get-GHRelease "yt-dlp/yt-dlp"
     $ytAsset = $ytRel.assets | Where-Object { $_.name -eq "yt-dlp.exe" } | Select-Object -First 1
-    if (-not $ytAsset) { Write-Host "  $esc[31m✗$esc[0m yt-dlp.exe not found" -ForegroundColor Red; exit 1 }
+    if (-not $ytAsset) { Write-Host "  `e[31m✗`e[0m yt-dlp.exe not found" -ForegroundColor Red; exit 1 }
 
     $ytDest = Join-Path $installDir "yt-dlp.exe"
-    Write-Host "  $esc[2mversion$esc[0m  $($ytRel.tag_name)"
-    Write-Host "  $esc[2mdest   $esc[0m  $ytDest"
+    Write-Host "  `e[2mversion`e[0m  $($ytRel.tag_name)"
+    Write-Host "  `e[2mdest   `e[0m  $ytDest"
     Write-Host ""
     Install-Binary -Url $ytAsset.browser_download_url -Dest $ytDest
-    Write-Host "  $esc[32m✓$esc[0m yt-dlp $($ytRel.tag_name)"
+    Write-Host "  `e[32m✓`e[0m yt-dlp $($ytRel.tag_name)"
     Write-Host ""
 }
 
 # ── 3. ffmpeg ─────────────────────────────────────────────────────────────────
 $ffDest = Join-Path $installDir "ffmpeg.exe"
 if (Test-Path $ffDest) {
-    Write-Host "  $esc[2m✓ ffmpeg already installed$esc[0m"
+    Write-Host "  `e[2m✓ ffmpeg already installed`e[0m"
     Write-Host ""
 } else {
-    Write-Host "  $esc[36m→$esc[0m  ffmpeg"
+    Write-Host "  `e[36m→`e[0m  ffmpeg"
     try {
         $ffRel   = Get-GHRelease "BtbN/FFmpeg-Builds"
         $ffAsset = $ffRel.assets |
@@ -239,13 +233,13 @@ if (Test-Path $ffDest) {
         $ffZip = Join-Path $env:TEMP "ffmpeg-radii5.zip"
         $ffTmp = Join-Path $env:TEMP "ffmpeg-radii5-extract"
 
-        Write-Host "  $esc[2msize   $esc[0m  $([math]::Round($ffAsset.size / 1MB, 1)) MB (zip)"
-        Write-Host "  $esc[2mdest   $esc[0m  $installDir"
+        Write-Host "  `e[2msize   `e[0m  $([math]::Round($ffAsset.size / 1MB, 1)) MB (zip)"
+        Write-Host "  `e[2mdest   `e[0m  $installDir"
         Write-Host ""
 
         Install-Binary -Url $ffAsset.browser_download_url -Dest $ffZip
 
-        Write-Host "  $esc[2mextracting...$esc[0m"
+        Write-Host "  `e[2mextracting...`e[0m"
         if (Test-Path $ffTmp) { Remove-Item $ffTmp -Recurse -Force }
         Expand-Archive -Path $ffZip -DestinationPath $ffTmp -Force
         Remove-Item $ffZip -Force
@@ -259,10 +253,10 @@ if (Test-Path $ffDest) {
         }
         Remove-Item $ffTmp -Recurse -Force
 
-        Write-Host "  $esc[32m✓$esc[0m ffmpeg installed"
+        Write-Host "  `e[32m✓`e[0m ffmpeg installed"
         Write-Host ""
     } catch {
-        Write-Host "  $esc[33m⚠$esc[0m ffmpeg install failed: $_" -ForegroundColor Yellow
+        Write-Host "  `e[33m⚠`e[0m ffmpeg install failed: $_" -ForegroundColor Yellow
         Write-Host "  Install manually: https://ffmpeg.org/download.html"
         Write-Host ""
     }
@@ -271,10 +265,10 @@ if (Test-Path $ffDest) {
 # ── 4. deno (JS runtime for yt-dlp) ──────────────────────────────────────────
 $denoDest = Join-Path $installDir "deno.exe"
 if (Test-Path $denoDest) {
-    Write-Host "  $esc[2m✓ deno already installed$esc[0m"
+    Write-Host "  `e[2m✓ deno already installed`e[0m"
     Write-Host ""
 } else {
-    Write-Host "  $esc[36m→$esc[0m  deno"
+    Write-Host "  `e[36m→`e[0m  deno"
     try {
         $denoRel   = Get-GHRelease "denoland/deno"
         $denoAsset = $denoRel.assets |
@@ -285,8 +279,8 @@ if (Test-Path $denoDest) {
         $denoZip = Join-Path $env:TEMP "deno-radii5.zip"
         $denoTmp = Join-Path $env:TEMP "deno-radii5-extract"
 
-        Write-Host "  $esc[2mversion$esc[0m  $($denoRel.tag_name)"
-        Write-Host "  $esc[2mdest   $esc[0m  $denoDest"
+        Write-Host "  `e[2mversion`e[0m  $($denoRel.tag_name)"
+        Write-Host "  `e[2mdest   `e[0m  $denoDest"
         Write-Host ""
 
         Install-Binary -Url $denoAsset.browser_download_url -Dest $denoZip
@@ -300,10 +294,10 @@ if (Test-Path $denoDest) {
         Copy-Item $denoExe.FullName -Destination $denoDest -Force
         Remove-Item $denoTmp -Recurse -Force
 
-        Write-Host "  $esc[32m✓$esc[0m deno $($denoRel.tag_name)"
+        Write-Host "  `e[32m✓`e[0m deno $($denoRel.tag_name)"
         Write-Host ""
     } catch {
-        Write-Host "  $esc[33m⚠$esc[0m deno install failed: $_" -ForegroundColor Yellow
+        Write-Host "  `e[33m⚠`e[0m deno install failed: $_" -ForegroundColor Yellow
         Write-Host "  Install manually: https://deno.com"
         Write-Host ""
     }
@@ -314,11 +308,11 @@ $curPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
 if ($curPath -notlike "*$installDir*") {
     [System.Environment]::SetEnvironmentVariable("PATH", "$curPath;$installDir", "User")
     $env:PATH = "$env:PATH;$installDir"
-    Write-Host "  $esc[32m✓$esc[0m Added $installDir to PATH"
+    Write-Host "  `e[32m✓`e[0m Added $installDir to PATH"
 } else {
-    Write-Host "  $esc[2m✓ $installDir already in PATH$esc[0m"
+    Write-Host "  `e[2m✓ $installDir already in PATH`e[0m"
 }
 
 Write-Host ""
-Write-Host "  $esc[1m$esc[32mAll done!$esc[0m  Try: radii5 --version"
+Write-Host "  `e[1m`e[32mAll done!`e[0m  Try: radii5 --version"
 Write-Host ""

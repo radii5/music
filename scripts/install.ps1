@@ -1,5 +1,23 @@
-﻿# radii5 installer for Windows
+﻿
+# radii5 installer for Windows
 # Usage: irm https://raw.githubusercontent.com/radii5/music/main/scripts/install.ps1 | iex
+# Enable ANSI/VT in CMD and PS5
+
+if ($host.Name -eq 'ConsoleHost') {
+    $kernel32 = Add-Type -MemberDefinition @"
+        [DllImport("kernel32.dll")]
+        public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+        [DllImport("kernel32.dll")]
+        public static extern IntPtr GetStdHandle(int nStdHandle);
+        [DllImport("kernel32.dll")]
+        public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+"@ -Name "Kernel32" -Namespace "Win32" -PassThru
+
+    $handle = $kernel32::GetStdHandle(-11)
+    $mode   = 0
+    $kernel32::GetConsoleMode($handle, [ref]$mode) | Out-Null
+    $kernel32::SetConsoleMode($handle, $mode -bor 4) | Out-Null
+}
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

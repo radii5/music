@@ -20,6 +20,7 @@ Write-Host ""
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
 # ── compile C# downloader ─────────────────────────────────────────────────────
+Add-Type -AssemblyName System.Net.Http
 if (-not ([System.Management.Automation.PSTypeName]'ChunkDownloader').Type) {
 Add-Type -Language CSharp @"
 using System;

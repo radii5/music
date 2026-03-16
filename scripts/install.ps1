@@ -1,5 +1,6 @@
-# radii5 installer for Windows
-# Usage: irm https://raw.githubusercontent.com/radii5/music/main/scripts/install.ps1 | iex
+# radii5 installer
+# Usage: irm https://radii5.github.io/music/install.ps1 | iex
+irm https://raw.githubusercontent.com/radii5/music/main/scripts/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

@@ -141,7 +141,7 @@ public static class ChunkDownloader
                 DrawBar(_downloaded, total);
             }
             DrawBar(total, total);
-            DrawBarDone(total);
+            DrawBarDone(total); 
 
             if (!errors.IsEmpty) {
                 string msg;

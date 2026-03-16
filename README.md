@@ -17,7 +17,7 @@
 
 ## Install
 
-**Windows**
+**Windows** — run in **PowerShell**
 ```powershell
 irm https://radii5.github.io/music/install.ps1 | iex
 ```

@@ -69,6 +69,7 @@ public static class ChunkDownloader
 
     public static void Download(string url, string dest, int numThreads) {
         System.Net.ServicePointManager.SecurityProtocol = (System.Net.SecurityProtocolType)3072; // TLS 1.2
+        System.Net.ServicePointManager.DefaultConnectionLimit = 256;
         using (var client = new HttpClient()) {
             client.Timeout = System.TimeSpan.FromMinutes(30);
             client.DefaultRequestHeaders.UserAgent.ParseAdd("radii5-installer");

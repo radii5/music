@@ -50,7 +50,7 @@ jobs:
         run: |
           VERSION=${GITHUB_REF_NAME}
           OUTPUT="radii5-${{ matrix.suffix }}${{ matrix.ext }}"
-          go build -ldflags="-s -w -X main.version=${VERSION}" -o "$OUTPUT" .
+          go build -ldflags="-s -w -X main.version=${VERSION}" -o "$OUTPUT" ./cmd/music
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

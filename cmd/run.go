@@ -26,6 +26,19 @@ func defaultMusicDir() string {
 	return filepath.Join(home, "Music", "radii5 downloads")
 }
 
+func RunWithOptions(url, format, output string, threads int) {
+	if url == "" {
+		color.Red("  ✗ No URL provided")
+		fmt.Println("  Usage: radii5 <url>")
+		os.Exit(1)
+	}
+
+	if err := downloader.Download(url, format, output, threads); err != nil {
+		color.Red("✗ %v", err)
+		os.Exit(1)
+	}
+}
+
 func Run(args []string) {
 	opts := parseArgs(args)
 

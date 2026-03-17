@@ -198,23 +198,48 @@ func resolve(url string) (*VideoInfo, error) {
 	url = cleanURL(url)
 	ytdlp := findBin("yt-dlp")
 
-	cmd := exec.Command(ytdlp,
+	// Create context with timeout for yt-dlp resolve operation
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, ytdlp,
 		"--dump-json",
 		"--format", "bestaudio",
 		"--no-playlist",
 		url,
 	)
 
-	out, err := cmd.Output()
+	// Capture both stdout and stderr
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	err := cmd.Wait()
+
+	// Check for context errors first
+	if ctx.Err() == context.Canceled {
+		return nil, fmt.Errorf("yt-dlp resolve canceled: %w", ctx.Err())
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return nil, fmt.Errorf("yt-dlp resolve timeout after 30 seconds")
+	}
+
 	if err != nil {
+		// Check if yt-dlp binary exists
 		if _, e := exec.LookPath(ytdlp); e != nil {
 			return nil, fmt.Errorf("yt-dlp not found — run the installer")
 		}
-		return nil, fmt.Errorf("yt-dlp error: %w", err)
+
+		// Return structured error with stderr
+		stderr := stderrBuf.String()
+		if stderr != "" {
+			return nil, fmt.Errorf("yt-dlp resolve failed: %w\nstderr: %s", err, stderr)
+		}
+		return nil, fmt.Errorf("yt-dlp resolve failed: %w", err)
 	}
 
 	var info VideoInfo
-	if err := json.Unmarshal(out, &info); err != nil {
+	if err := json.Unmarshal(stdoutBuf.Bytes(), &info); err != nil {
 		return nil, fmt.Errorf("failed to parse track info: %w", err)
 	}
 	return &info, nil

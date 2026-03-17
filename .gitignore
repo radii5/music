@@ -19,3 +19,13 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Music downloads (should never be in repo)
+*.mp3
+*.flac
+*.wav
+*.m4a
+*.opus
+*.aac
+Music/
+~/Music/

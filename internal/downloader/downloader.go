@@ -1,6 +1,8 @@
 package downloader
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -76,7 +78,7 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func Download(url, format, outputDir string, threads int) error {
+func Download(url, format, outputDir string, threads int) (err error) {
 	bold := color.New(color.FgWhite, color.Bold)
 	cyan := color.New(color.FgCyan)
 
@@ -107,6 +109,17 @@ func Download(url, format, outputDir string, threads int) error {
 	tmpFile := filepath.Join(outputDir, safeTitle+".tmp")
 	outFile := filepath.Join(outputDir, safeTitle+"."+format)
 
+	// Ensure temp file cleanup on panic or error
+	defer func() {
+		if r := recover(); r != nil {
+			os.Remove(tmpFile)
+			panic(r) // Re-panic after cleanup
+		}
+		if err != nil {
+			os.Remove(tmpFile)
+		}
+	}()
+
 	// If direct URL available, download ourselves (fast parallel chunks).
 	// Otherwise fall back to yt-dlp for extraction + conversion.
 	if info.URL != "" {
@@ -122,14 +135,12 @@ func Download(url, format, outputDir string, threads int) error {
 		if supportsRange && size > 0 && adaptiveThreads > 1 {
 			cyan.Printf("  → Downloading in %d parallel chunks...\n\n", adaptiveThreads)
 			if err := parallelDownload(info.URL, tmpFile, size, adaptiveThreads); err != nil {
-				os.Remove(tmpFile)
 				return fmt.Errorf("download failed: %w", err)
 			}
 		} else {
 			cyan.Println("  → Downloading...")
 			fmt.Println()
 			if err := streamDownload(info.URL, tmpFile, size); err != nil {
-				os.Remove(tmpFile)
 				return fmt.Errorf("download failed: %w", err)
 			}
 		}
@@ -214,6 +225,10 @@ func ytDlpFallback(url, format, outFile string, threads int) error {
 	adaptiveThreads := DetermineThreads(0, threads) // 0 size = unknown, use adaptive logic
 	cyan.Printf("  → Downloading via yt-dlp (%d fragments)...\n\n", adaptiveThreads)
 
+	// Create context with timeout for yt-dlp operation
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
 	ytdlp := findBin("yt-dlp")
 	args := []string{
 		"--no-playlist",
@@ -227,10 +242,12 @@ func ytDlpFallback(url, format, outFile string, threads int) error {
 		url,
 	}
 
-	cmd := exec.Command(ytdlp, args...)
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
-	cmd.Start()
+	cmd := exec.CommandContext(ctx, ytdlp, args...)
+
+	// Capture both stdout and stderr
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
 
 	var bar *progress.Bar
 	var mu sync.Mutex
@@ -259,9 +276,23 @@ func ytDlpFallback(url, format, outFile string, threads int) error {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); scan(stdout, false) }()
-	go func() { defer wg.Done(); scan(stderr, true) }()
-	wg.Wait()
+	go func() { defer wg.Done(); scan(bytes.NewReader(stdoutBuf.Bytes()), false) }()
+	go func() { defer wg.Done(); scan(bytes.NewReader(stderrBuf.Bytes()), true) }()
+
+	// Start scanning in background
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				time.Sleep(100 * time.Millisecond)
+				// Continue scanning new output
+			}
+		}
+	}()
+
+	err := cmd.Wait()
 
 	mu.Lock()
 	if bar != nil {
@@ -269,8 +300,26 @@ func ytDlpFallback(url, format, outFile string, threads int) error {
 	}
 	mu.Unlock()
 
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("yt-dlp: %w", err)
+	if err != nil {
+		// Check if context was canceled
+		if ctx.Err() == context.Canceled {
+			return fmt.Errorf("yt-dlp canceled: %w", ctx.Err())
+		}
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("yt-dlp timeout after 30 minutes: %w", err)
+		}
+
+		// Check if yt-dlp binary exists
+		if _, e := exec.LookPath(ytdlp); e != nil {
+			return fmt.Errorf("yt-dlp not found — run the installer: %w", e)
+		}
+
+		// Return structured error with stderr
+		stderr := stderrBuf.String()
+		if stderr != "" {
+			return fmt.Errorf("yt-dlp failed: %w\nstderr: %s", err, stderr)
+		}
+		return fmt.Errorf("yt-dlp failed: %w", err)
 	}
 
 	color.New(color.FgGreen, color.Bold).Printf("  ✓ Saved to %s\n\n", outFile)

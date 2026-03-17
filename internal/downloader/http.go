@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,12 +25,89 @@ func min(a, b int) int {
 	return b
 }
 
+// RetryableHTTPClient performs HTTP requests with exponential backoff retry
+type RetryableHTTPClient struct {
+	Client     *http.Client
+	MaxRetries int
+	BaseDelay  time.Duration
+}
+
+// NewRetryableHTTPClient creates a new retryable HTTP client
+func NewRetryableHTTPClient(maxRetries int, baseDelay time.Duration) *RetryableHTTPClient {
+	return &RetryableHTTPClient{
+		Client:     NewOptimizedHTTPClient(),
+		MaxRetries: maxRetries,
+		BaseDelay:  baseDelay,
+	}
+}
+
+// Do performs an HTTP request with retry logic
+func (rhc *RetryableHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	var lastErr error
+
+	for attempt := 0; attempt <= rhc.MaxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s
+			delay := time.Duration(1<<uint(attempt-1)) * rhc.BaseDelay
+			if delay > 30*time.Second {
+				delay = 30 * time.Second // Cap at 30s
+			}
+			time.Sleep(delay)
+		}
+
+		resp, err := rhc.Client.Do(req)
+		if err == nil {
+			// Check for successful status codes
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				return resp, nil
+			}
+			resp.Body.Close() // Close body on error status
+
+			// Retry on 5xx errors, but not 4xx
+			if resp.StatusCode >= 500 {
+				lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+				continue
+			}
+
+			// Don't retry on 4xx errors
+			return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		}
+
+		lastErr = err
+
+		// Retry on network errors, but not on context cancellation
+		if req.Context().Err() == context.Canceled {
+			return nil, req.Context().Err()
+		}
+	}
+
+	return nil, fmt.Errorf("failed after %d retries: %w", rhc.MaxRetries, lastErr)
+}
+
+// Get performs a GET request with retry logic
+func (rhc *RetryableHTTPClient) Get(url string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return rhc.Do(req)
+}
+
+// Head performs a HEAD request with retry logic
+func (rhc *RetryableHTTPClient) Head(url string) (*http.Response, error) {
+	req, err := http.NewRequest("HEAD", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return rhc.Do(req)
+}
+
 // ProgressCallback reports download progress
 type ProgressCallback func(downloaded, total int64)
 
 // ChunkDownloader handles parallel chunked downloads
 type ChunkDownloader struct {
-	Client    *http.Client
+	Client    *RetryableHTTPClient
 	Progress  ProgressCallback
 	Threads   int
 	ChunkSize int64
@@ -71,7 +149,7 @@ func DetermineThreads(fileSize int64, userThreads int) int {
 // NewChunkDownloader creates a new chunk downloader with optimized defaults
 func NewChunkDownloader(threads int, progress ProgressCallback) *ChunkDownloader {
 	return &ChunkDownloader{
-		Client:    NewOptimizedHTTPClient(),
+		Client:    NewRetryableHTTPClient(3, time.Second),
 		Progress:  progress,
 		Threads:   threads,
 		ChunkSize: 1024 * 1024, // 1MB chunks
@@ -133,7 +211,7 @@ func OptimalThreadsForBandwidth(mbps float64, fileSize int64) int {
 // NewAdaptiveChunkDownloader creates a downloader that determines threads based on file size and bandwidth
 func NewAdaptiveChunkDownloader(userThreads int, progress ProgressCallback) *ChunkDownloader {
 	return &ChunkDownloader{
-		Client:    NewOptimizedHTTPClient(),
+		Client:    NewRetryableHTTPClient(3, time.Second),
 		Progress:  progress,
 		Threads:   userThreads, // Will be updated after probing
 		ChunkSize: 1024 * 1024, // 1MB chunks

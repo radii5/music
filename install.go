@@ -274,44 +274,23 @@ func fetchRange(url string, start, end int64) ([]byte, error) {
 }
 
 // chunkedDownload downloads url to dest using n parallel Range requests.
+// Includes resume support by checking for existing temp files.
 func chunkedDownload(url, dest string, n int) error {
 	size := probeSize(url)
 
 	b := newBar(size)
 
+	// Check for existing temp file to resume download
+	var existingSize int64
+	if fi, err := os.Stat(dest); err == nil {
+		existingSize = fi.Size()
+		b.add(existingSize) // Update progress bar with existing data
+		fmt.Printf("  → Resuming download from %s\n", fmtBytes(existingSize))
+	}
+
 	if size == 0 || n <= 1 {
 		// Fallback: simple streaming download
-		client := createOptimizedClient()
-		resp, err := client.Get(url)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-
-		f, err := os.Create(dest)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-
-		buf := make([]byte, 32*1024)
-		for {
-			nr, rerr := resp.Body.Read(buf)
-			if nr > 0 {
-				if _, werr := f.Write(buf[:nr]); werr != nil {
-					return werr
-				}
-				b.add(int64(nr))
-			}
-			if rerr == io.EOF {
-				break
-			}
-			if rerr != nil {
-				return rerr
-			}
-		}
-		b.finish()
-		return nil
+		return streamingDownload(url, dest, size, existingSize)
 	}
 
 	type result struct {
@@ -329,6 +308,18 @@ func chunkedDownload(url, dest string, n int) error {
 		if i == n-1 {
 			end = size - 1
 		}
+
+		// Skip chunks that are already downloaded
+		if existingSize > 0 && start < existingSize {
+			if end < existingSize {
+				// Chunk is fully downloaded, skip it
+				continue
+			} else {
+				// Partial chunk, adjust start position
+				start = existingSize
+			}
+		}
+
 		go func(idx int, s, e int64) {
 			data, err := fetchRange(url, s, e)
 			if err == nil {
@@ -339,24 +330,96 @@ func chunkedDownload(url, dest string, n int) error {
 	}
 
 	chunks := make([][]byte, n)
-	for i := 0; i < n; i++ {
+	received := 0
+	expected := n
+	if existingSize > 0 {
+		expected = 0
+		for i := 0; i < n; i++ {
+			start := int64(i) * chunkSize
+			if start >= existingSize {
+				expected++
+			}
+		}
+	}
+
+	for i := 0; i < expected; i++ {
 		r := <-results
 		if r.err != nil {
 			return fmt.Errorf("chunk %d failed: %w", r.idx, r.err)
 		}
 		chunks[r.idx] = r.data
+		received++
 	}
+
+	if received != expected {
+		return fmt.Errorf("expected %d chunks, received %d", expected, received)
+	}
+
 	b.finish()
 
-	f, err := os.Create(dest)
+	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
 	for _, chunk := range chunks {
-		if _, err := f.Write(chunk); err != nil {
-			return err
+		if chunk != nil { // Only write chunks that were downloaded
+			if _, err := f.Write(chunk); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// streamingDownload handles simple streaming download with resume support
+func streamingDownload(url, dest string, totalSize, existingSize int64) error {
+	client := createOptimizedClient()
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+
+	// Add Range header for resume support
+	if existingSize > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", existingSize))
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	buf := make([]byte, 32*1024)
+	var downloaded int64
+
+	for {
+		nr, rerr := resp.Body.Read(buf)
+		if nr > 0 {
+			if _, werr := f.Write(buf[:nr]); werr != nil {
+				return werr
+			}
+			downloaded += int64(nr)
+			// Progress already shown by chunked downloader
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return rerr
 		}
 	}
 	return nil

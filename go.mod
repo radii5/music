@@ -1,4 +1,4 @@
-module github.com/radii5/radii5
+module github.com/radii5/music
 
 go 1.22
 

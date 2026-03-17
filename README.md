@@ -34,10 +34,15 @@ sudo apt install ffmpeg      # Debian/Ubuntu
 
 **Alternative: Prebuilt releases**
 ```sh
-# Download from GitHub Releases and verify SHA256
-wget https://github.com/radii5/music/releases/latest/download/radii5-windows-amd64.exe
-# Verify hash from release notes
-sha256sum radii5-windows-amd64.exe
+# Windows (PowerShell)
+curl -L -o radii5.exe https://github.com/radii5/music/releases/latest/download/radii5-windows-amd64.exe
+# Add to PATH or run from command line:
+.\radii5.exe "https://www.youtube.com/watch?v=VIDEO_ID"
+
+# Linux/macOS
+wget https://github.com/radii5/music/releases/latest/download/radii5-linux-amd64
+chmod +x radii5-linux-amd64
+sudo mv radii5-linux-amd64 /usr/local/bin/radii5
 ```
 
 **Alternative: Go install**

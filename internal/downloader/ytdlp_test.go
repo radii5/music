@@ -139,7 +139,7 @@ func TestYtDlpFallback_ContextTimeout(t *testing.T) {
 	defer func() { findBin = originalFindBin }()
 
 	start := time.Now()
-	err := ytDlpFallback("http://example.com", "mp3", "test.mp3", 4)
+	err := ytDlpFallback("http://example.com", "mp3", "test.mp3", 4, false)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -167,7 +167,7 @@ func TestYtDlpFallback_BinaryNotFound(t *testing.T) {
 	}
 	defer func() { findBin = originalFindBin }()
 
-	err := ytDlpFallback("http://example.com", "mp3", "test.mp3", 4)
+	err := ytDlpFallback("http://example.com", "mp3", "test.mp3", 4, false)
 	if err == nil {
 		t.Fatal("Expected error for missing binary")
 	}

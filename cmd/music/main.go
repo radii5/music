@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/radii5/music/cmd"
@@ -33,18 +34,45 @@ func main() {
 				Value:   0,
 				Usage:   "Number of parallel download threads (0 = adaptive)",
 			},
+			&cli.IntFlag{
+				Name:    "workers",
+				Aliases: []string{"w"},
+				Value:   4,
+				Usage:   "Number of concurrent download workers for playlists",
+			},
 		},
 		Action: func(c *cli.Context) error {
 			if c.NArg() == 0 {
 				return cli.ShowAppHelp(c)
 			}
 
-			url := c.Args().First()
-			format := c.String("format")
-			output := c.String("output")
-			threads := c.Int("threads")
+			// Build arguments array for cmd.Run
+			args := []string{}
 
-			cmd.RunWithOptions(url, format, output, threads)
+			// Add format flag if specified
+			if format := c.String("format"); format != "mp3" {
+				args = append(args, "--format", format)
+			}
+
+			// Add output flag if specified
+			if output := c.String("output"); output != "~/Music/radii5 downloads" {
+				args = append(args, "--output", output)
+			}
+
+			// Add threads flag if specified
+			if threads := c.Int("threads"); threads != 0 {
+				args = append(args, "--threads", fmt.Sprintf("%d", threads))
+			}
+
+			// Add workers flag if specified
+			if workers := c.Int("workers"); workers != 4 {
+				args = append(args, "--workers", fmt.Sprintf("%d", workers))
+			}
+
+			// Add URL
+			args = append(args, c.Args().First())
+
+			cmd.Run(args)
 			return nil
 		},
 	}

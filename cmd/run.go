@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/fatih/color"
 	"github.com/radii5/music/internal/downloader"
@@ -15,10 +16,10 @@ type Options struct {
 	Format    string
 	OutputDir string
 	Threads   int
+	Workers   int
 }
 
 func defaultMusicDir() string {
-	// Use OS music folder: ~/Music/radii5 downloads
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "radii5 downloads"
@@ -26,41 +27,40 @@ func defaultMusicDir() string {
 	return filepath.Join(home, "Music", "radii5 downloads")
 }
 
-func RunWithOptions(url, format, output string, threads int) {
-	if url == "" {
-		color.Red("  ✗ No URL provided")
-		fmt.Println("  Usage: radii5 <url>")
-		os.Exit(1)
-	}
-
-	if err := downloader.Download(url, format, output, threads); err != nil {
-		color.Red("✗ %v", err)
-		os.Exit(1)
-	}
+func IsPlaylist(url string) bool {
+	return strings.Contains(url, "playlist?list=") ||
+		strings.Contains(url, "/sets/") || // SoundCloud playlists
+		strings.Contains(url, "/album/") // Bandcamp albums
 }
 
 func Run(args []string) {
-	opts := parseArgs(args)
-
+	opts := ParseArgs(args)
 	if opts.URL == "" {
 		color.Red("  ✗ No URL provided")
 		fmt.Println("  Usage: radii5 <url>")
 		os.Exit(1)
 	}
 
-	if err := downloader.Download(opts.URL, opts.Format, opts.OutputDir, opts.Threads); err != nil {
-		color.Red("✗ %v", err)
-		os.Exit(1)
+	if IsPlaylist(opts.URL) {
+		if err := downloader.DownloadPlaylist(opts.URL, opts.Format, opts.OutputDir, opts.Threads, opts.Workers); err != nil {
+			color.Red("✗ %v", err)
+			os.Exit(1)
+		}
+	} else {
+		if err := downloader.Download(opts.URL, opts.Format, opts.OutputDir, opts.Threads, false, nil); err != nil {
+			color.Red("✗ %v", err)
+			os.Exit(1)
+		}
 	}
 }
 
-func parseArgs(args []string) Options {
+func ParseArgs(args []string) Options {
 	opts := Options{
 		Format:    "mp3",
 		OutputDir: defaultMusicDir(),
 		Threads:   8,
+		Workers:   4,
 	}
-
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--format", "-f":
@@ -80,15 +80,20 @@ func parseArgs(args []string) Options {
 					opts.Threads = n
 				}
 			}
+		case "--workers", "-w":
+			if i+1 < len(args) {
+				i++
+				if n, err := strconv.Atoi(args[i]); err == nil {
+					opts.Workers = n
+				}
+			}
 		default:
-			// First non-flag arg is the URL
 			if opts.URL == "" && len(args[i]) > 0 && args[i][0] != '-' {
 				opts.URL = args[i]
-			} else if args[i][0] == '-' {
+			} else if len(args[i]) > 0 && args[i][0] == '-' {
 				fmt.Fprintf(os.Stderr, "unknown flag: %s\n", args[i])
 			}
 		}
 	}
-
 	return opts
 }

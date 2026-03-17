@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,14 +13,37 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fatih/color"
 	"github.com/radii5/music/internal/metadata"
 	"github.com/radii5/music/internal/progress"
 )
+
+// TrackProgress lets playlist mode track per-slot byte progress in real time.
+type TrackProgress struct {
+	Title      string
+	Current    atomic.Int64
+	Total      atomic.Int64
+	Done       atomic.Bool
+	Failed     atomic.Bool
+	Converting atomic.Bool
+	ConvertPct atomic.Int64 // 0-100
+}
+
+func (t *TrackProgress) Reset(title string, total int64) {
+	t.Title = title
+	t.Current.Store(0)
+	t.Total.Store(total)
+	t.Done.Store(false)
+	t.Failed.Store(false)
+	t.Converting.Store(false)
+	t.ConvertPct.Store(0)
+}
 
 type VideoInfo struct {
 	Title          string  `json:"title"`
@@ -44,7 +68,12 @@ func (v *VideoInfo) DisplayArtist() string {
 
 var httpClient = NewOptimizedHTTPClient()
 
-const maxRetries = 5
+const maxRetries = 10
+
+// buildCommand creates an exec.Cmd with the given name and arguments
+func buildCommand(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
+}
 
 // findBin finds the path to a binary, can be overridden for testing
 var findBin = func(name string) string {
@@ -80,28 +109,43 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func Download(url, format, outputDir string, threads int) (err error) {
+func Download(url, format, outputDir string, threads int, silent bool, tp *TrackProgress) error {
 	bold := color.New(color.FgWhite, color.Bold)
 	cyan := color.New(color.FgCyan)
 
-	fmt.Println()
-	cyan.Print("  → ")
-	bold.Println("Resolving track...")
+	if !silent {
+		fmt.Println()
+		cyan.Print("  → ")
+		bold.Println("Resolving track...")
+	}
 
 	info, err := resolve(url)
 	if err != nil {
+		if tp != nil {
+			tp.Failed.Store(true)
+		}
 		return fmt.Errorf("could not resolve URL: %w", err)
 	}
 
-	fmt.Println()
-	color.New(color.FgHiWhite, color.Bold).Printf("  %s\n", info.Title)
-	if artist := info.DisplayArtist(); artist != "" {
-		color.New(color.FgHiBlack).Printf("  %s\n", artist)
+	if tp != nil {
+		size := info.Filesize
+		if size == 0 {
+			size = info.FilesizeApprox
+		}
+		tp.Reset(info.Title, size)
 	}
-	if info.Duration > 0 {
-		color.New(color.FgHiBlack).Printf("  %s\n", formatDuration(info.Duration))
+
+	if !silent {
+		fmt.Println()
+		color.New(color.FgHiWhite, color.Bold).Printf("  %s\n", info.Title)
+		if artist := info.DisplayArtist(); artist != "" {
+			color.New(color.FgHiBlack).Printf("  %s\n", artist)
+		}
+		if info.Duration > 0 {
+			color.New(color.FgHiBlack).Printf("  %s\n", formatDuration(info.Duration))
+		}
+		fmt.Println()
 	}
-	fmt.Println()
 
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf("cannot create output dir: %w", err)
@@ -133,63 +177,107 @@ func Download(url, format, outputDir string, threads int) (err error) {
 		_, supportsRange, _ := probeURL(info.URL)
 		start := time.Now()
 
-		adaptiveThreads := DetermineThreads(size, threads)
-		if supportsRange && size > 0 && adaptiveThreads > 1 {
-			cyan.Printf("  → Downloading in %d parallel chunks...\n\n", adaptiveThreads)
-			if err := parallelDownload(info.URL, tmpFile, size, adaptiveThreads); err != nil {
+		if supportsRange && size > 0 && threads > 1 {
+			if !silent {
+				cyan.Printf("  → Downloading in %d parallel chunks...\n\n", threads)
+			}
+			if err := parallelDownload(info.URL, tmpFile, size, threads, silent, tp); err != nil {
+				os.Remove(tmpFile)
+				if tp != nil {
+					tp.Failed.Store(true)
+				}
 				return fmt.Errorf("download failed: %w", err)
 			}
 		} else {
-			cyan.Println("  → Downloading...")
-			fmt.Println()
-			if err := streamDownload(info.URL, tmpFile, size); err != nil {
+			if !silent {
+				cyan.Println("  → Downloading...")
+				fmt.Println()
+			}
+			if err := streamDownload(info.URL, tmpFile, size, silent, tp); err != nil {
+				os.Remove(tmpFile)
+				if tp != nil {
+					tp.Failed.Store(true)
+				}
 				return fmt.Errorf("download failed: %w", err)
 			}
 		}
 
 		elapsed := time.Since(start)
 
-		// Print speed summary
-		var size64 int64
-		if fi, err := os.Stat(tmpFile); err == nil {
-			size64 = fi.Size()
-		}
-		if size64 > 0 && elapsed.Seconds() > 0 {
-			mbps := float64(size64) / (1 << 20) / elapsed.Seconds()
-			if supportsRange && size > 0 && adaptiveThreads > 1 {
-				color.New(color.FgHiBlack).Printf("  %.1f MB/s  (%.1fs,  %d threads)\n", mbps, elapsed.Seconds(), adaptiveThreads)
-			} else {
-				color.New(color.FgHiBlack).Printf("  %.1f MB/s  (%.1fs)\n", mbps, elapsed.Seconds())
+		if !silent {
+			// Print speed summary
+			var size64 int64
+			if fi, err := os.Stat(tmpFile); err == nil {
+				size64 = fi.Size()
+			}
+			if size64 > 0 && elapsed.Seconds() > 0 {
+				mbps := float64(size64) / (1 << 20) / elapsed.Seconds()
+				if supportsRange && size > 0 && threads > 1 {
+					color.New(color.FgHiBlack).Printf("  %.1f MB/s  (%.1fs,  %d threads)\n", mbps, elapsed.Seconds(), threads)
+				} else {
+					color.New(color.FgHiBlack).Printf("  %.1f MB/s  (%.1fs)\n", mbps, elapsed.Seconds())
+				}
 			}
 		}
 
 		if format != info.Ext {
-			cyan.Print("\n  → Converting to " + strings.ToUpper(format) + "...")
-			if err := convertAudio(tmpFile, outFile, format); err != nil {
+			if !silent {
+				cyan.Print("\n  → Converting to " + strings.ToUpper(format) + "...")
+			}
+			if tp != nil {
+				tp.Converting.Store(true)
+				tp.ConvertPct.Store(0)
+				err = convertAudioProgress(tmpFile, outFile, format, info.Duration, tp)
+			} else {
+				err = convertAudio(tmpFile, outFile, format)
+			}
+			if err != nil {
 				os.Remove(tmpFile)
+				if tp != nil {
+					tp.Failed.Store(true)
+				}
 				return fmt.Errorf("conversion failed: %w", err)
 			}
 			os.Remove(tmpFile)
-			cyan.Println(" done")
+			if !silent {
+				cyan.Println(" done")
+			}
 		} else {
 			os.Rename(tmpFile, outFile)
 		}
 
 		if format == "mp3" {
-			cyan.Print("  → Writing metadata...")
+			if !silent {
+				cyan.Print("  → Writing metadata...")
+			}
 			_ = metadata.WriteMP3Tags(outFile, info.Title, info.DisplayArtist(), info.Album, info.Thumbnail)
-			cyan.Println(" done")
+			if !silent {
+				cyan.Println(" done")
+			}
 		}
 
-		fmt.Println()
-		color.New(color.FgGreen, color.Bold).Print("  ✓ ")
-		fmt.Printf("Saved to %s", color.New(color.FgCyan).Sprint(outFile))
-		color.New(color.FgHiBlack).Printf("  (%s)\n\n", elapsed.Round(time.Millisecond))
+		if tp != nil {
+			tp.Converting.Store(false)
+			tp.Done.Store(true)
+		}
+
+		if !silent {
+			fmt.Println()
+			color.New(color.FgGreen, color.Bold).Print("  ✓ ")
+			fmt.Printf("Saved to %s", color.New(color.FgCyan).Sprint(outFile))
+			color.New(color.FgHiBlack).Printf("  (%s)\n\n", elapsed.Round(time.Millisecond))
+		}
 
 	} else {
 		// No direct URL — let yt-dlp handle the full download + conversion
-		if err := ytDlpFallback(url, format, outFile, threads); err != nil {
+		if err := ytDlpFallback(url, format, outFile, threads, silent); err != nil {
+			if tp != nil {
+				tp.Failed.Store(true)
+			}
 			return err
+		}
+		if tp != nil {
+			tp.Done.Store(true)
 		}
 	}
 
@@ -282,10 +370,12 @@ func resolve(url string) (*VideoInfo, error) {
 	return &info, nil
 }
 
-func ytDlpFallback(url, format, outFile string, threads int) error {
+func ytDlpFallback(url, format, outFile string, threads int, silent bool) error {
 	cyan := color.New(color.FgCyan)
 	adaptiveThreads := DetermineThreads(0, threads) // 0 size = unknown, use adaptive logic
-	cyan.Printf("  → Downloading via yt-dlp (%d fragments)...\n\n", adaptiveThreads)
+	if !silent {
+		cyan.Printf("  → Downloading via yt-dlp (%d fragments)...\n\n", adaptiveThreads)
+	}
 
 	// Create context with timeout for yt-dlp operation
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -320,7 +410,7 @@ func ytDlpFallback(url, format, outFile string, threads int) error {
 		for scanner.Scan() {
 			line := scanner.Text()
 			pct, total, current, ok := parseYtDlpProgress(line)
-			if ok {
+			if ok && !silent {
 				mu.Lock()
 				if bar == nil {
 					bar = progress.NewBar(total)
@@ -330,7 +420,7 @@ func ytDlpFallback(url, format, outFile string, threads int) error {
 					once.Do(func() { bar.Finish() })
 				}
 				mu.Unlock()
-			} else if isErr && (strings.Contains(line, "ERROR")) {
+			} else if isErr && (strings.Contains(line, "ERROR")) && !silent {
 				fmt.Fprintf(os.Stderr, "  %s\n", color.RedString(line))
 			}
 		}
@@ -384,7 +474,9 @@ func ytDlpFallback(url, format, outFile string, threads int) error {
 		return fmt.Errorf("yt-dlp failed: %w", err)
 	}
 
-	color.New(color.FgGreen, color.Bold).Printf("  ✓ Saved to %s\n\n", outFile)
+	if !silent {
+		color.New(color.FgGreen, color.Bold).Printf("  ✓ Saved to %s\n\n", outFile)
+	}
 	return nil
 }
 
@@ -399,7 +491,7 @@ func probeURL(url string) (int64, bool, error) {
 	return size, supportsRange, nil
 }
 
-func parallelDownload(url, dest string, size int64, threads int) error {
+func parallelDownload(url, dest string, size int64, threads int, silent bool, tp *TrackProgress) error {
 	f, err := os.Create(dest)
 	if err != nil {
 		return err
@@ -413,7 +505,10 @@ func parallelDownload(url, dest string, size int64, threads int) error {
 	chunkSize := size / int64(threads)
 	var wg sync.WaitGroup
 	errCh := make(chan error, threads)
-	bar := progress.NewBar(size)
+	var bar *progress.Bar
+	if !silent {
+		bar = progress.NewBar(size)
+	}
 
 	for i := 0; i < threads; i++ {
 		wg.Add(1)
@@ -424,14 +519,16 @@ func parallelDownload(url, dest string, size int64, threads int) error {
 			if i == threads-1 {
 				end = size - 1
 			}
-			if err := fetchWithRetry(url, dest, start, end, bar); err != nil {
+			if err := fetchWithRetry(url, dest, start, end, bar, tp); err != nil {
 				errCh <- fmt.Errorf("chunk %d: %w", i, err)
 			}
 		}(i)
 	}
 
 	wg.Wait()
-	bar.Finish()
+	if bar != nil {
+		bar.Finish()
+	}
 	close(errCh)
 
 	for err := range errCh {
@@ -442,13 +539,13 @@ func parallelDownload(url, dest string, size int64, threads int) error {
 	return nil
 }
 
-func fetchWithRetry(url, dest string, start, end int64, bar *progress.Bar) error {
+func fetchWithRetry(url, dest string, start, end int64, bar *progress.Bar, tp *TrackProgress) error {
 	current := start
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(1<<uint(attempt-1)) * time.Second)
 		}
-		written, err := fetchRangeToDisk(url, dest, current, end, bar)
+		written, err := fetchRangeToDisk(url, dest, current, end, bar, tp)
 		current += written
 		if err == nil {
 			return nil
@@ -460,7 +557,7 @@ func fetchWithRetry(url, dest string, start, end int64, bar *progress.Bar) error
 	return fmt.Errorf("failed after %d retries", maxRetries)
 }
 
-func fetchRangeToDisk(url, dest string, start, end int64, bar *progress.Bar) (int64, error) {
+func fetchRangeToDisk(url, dest string, start, end int64, bar *progress.Bar, tp *TrackProgress) (int64, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return 0, err
@@ -484,11 +581,29 @@ func fetchRangeToDisk(url, dest string, start, end int64, bar *progress.Bar) (in
 		return 0, err
 	}
 
-	n, err := io.Copy(f, io.TeeReader(resp.Body, bar))
+	var writers []io.Writer
+	writers = append(writers, f)
+	if bar != nil {
+		writers = append(writers, bar)
+	}
+	if tp != nil {
+		writers = append(writers, &tpWriter{tp: tp})
+	}
+
+	n, err := io.Copy(io.MultiWriter(writers...), resp.Body)
 	return n, err
 }
 
-func streamDownload(url, dest string, size int64) error {
+type tpWriter struct {
+	tp *TrackProgress
+}
+
+func (w *tpWriter) Write(p []byte) (int, error) {
+	w.tp.Current.Add(int64(len(p)))
+	return len(p), nil
+}
+
+func streamDownload(url, dest string, size int64, silent bool, tp *TrackProgress) error {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return err
@@ -507,9 +622,16 @@ func streamDownload(url, dest string, size int64) error {
 	}
 	defer f.Close()
 
-	bar := progress.NewBar(size)
-	_, err = io.Copy(f, io.TeeReader(resp.Body, bar))
-	bar.Finish()
+	var writers []io.Writer
+	writers = append(writers, f)
+	if !silent {
+		writers = append(writers, progress.NewBar(size))
+	}
+	if tp != nil {
+		writers = append(writers, &tpWriter{tp: tp})
+	}
+
+	_, err = io.Copy(io.MultiWriter(writers...), resp.Body)
 	return err
 }
 
@@ -529,6 +651,55 @@ func convertAudio(input, output, format string) error {
 	cmd := exec.Command(ffmpeg, args...)
 	cmd.Stderr = io.Discard
 	return cmd.Run()
+}
+
+// convertAudioProgress runs ffmpeg with -progress pipe:1 so we can
+// parse out_time_ms and report conversion percentage via tp.
+func convertAudioProgress(input, output, format string, durationSecs float64, tp *TrackProgress) error {
+	ffmpeg := findBin("ffmpeg")
+	var args []string
+	switch format {
+	case "mp3":
+		args = []string{"-i", input, "-codec:a", "libmp3lame", "-qscale:a", "0", "-progress", "pipe:1", "-y", output}
+	case "flac":
+		args = []string{"-i", input, "-codec:a", "flac", "-compression_level", "8", "-progress", "pipe:1", "-y", output}
+	case "m4a":
+		args = []string{"-i", input, "-codec:a", "aac", "-b:a", "256k", "-progress", "pipe:1", "-y", output}
+	default:
+		args = []string{"-i", input, "-progress", "pipe:1", "-y", output}
+	}
+
+	cmd := exec.Command(ffmpeg, args...)
+	cmd.Stderr = io.Discard
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return convertAudio(input, output, format)
+	}
+	if err := cmd.Start(); err != nil {
+		return convertAudio(input, output, format)
+	}
+
+	durationMs := int64(durationSecs * 1000000)
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "out_time_ms=") {
+			val := strings.TrimPrefix(line, "out_time_ms=")
+			if ms, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64); err == nil && durationMs > 0 {
+				pct := int64(float64(ms) / float64(durationMs) * 100)
+				if pct > 100 {
+					pct = 100
+				}
+				if pct < 0 {
+					pct = 0
+				}
+				tp.ConvertPct.Store(pct)
+			}
+		}
+	}
+
+	return cmd.Wait()
 }
 
 func cleanURL(raw string) string {

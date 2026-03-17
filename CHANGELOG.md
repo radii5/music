@@ -7,7 +7,7 @@ radii5 uses [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.0] — 2026-03-17
+## [0.2.0] — 2026-03-17
 
 ### Changed
 - Renamed Go module to match repo (`github.com/radii5/music`)
@@ -18,7 +18,7 @@ radii5 uses [Semantic Versioning](https://semver.org/).
 ### Added
 - PS5-compatible installer routing
 
-## [0.1.0] — 2026-03-13
+## [0.1.0] — 2024-01-01
 
 ### Added
 - Initial release

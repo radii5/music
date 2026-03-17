@@ -16,20 +16,6 @@
 
 ## Install
 
-**Security: Prebuilt releases recommended**
-```sh
-# Download from GitHub Releases and verify SHA256
-wget https://github.com/radii5/music/releases/latest/download/radii5-windows-amd64.exe
-# Verify hash from release notes
-sha256sum radii5-windows-amd64.exe
-```
-
-**Alternative: Go install**
-```sh
-go install github.com/radii5/music/cmd/music@latest
-```
-
-**One-liner installers (use with caution)**
 **Windows** — run in **PowerShell**
 ```powershell
 irm https://radii5.github.io/music/install.ps1 | iex
@@ -44,6 +30,19 @@ Installs radii5 and yt-dlp. ffmpeg is required separately:
 ```sh
 brew install ffmpeg          # macOS
 sudo apt install ffmpeg      # Debian/Ubuntu
+```
+
+**Alternative: Prebuilt releases**
+```sh
+# Download from GitHub Releases and verify SHA256
+wget https://github.com/radii5/music/releases/latest/download/radii5-windows-amd64.exe
+# Verify hash from release notes
+sha256sum radii5-windows-amd64.exe
+```
+
+**Alternative: Go install**
+```sh
+go install github.com/radii5/music/cmd/music@latest
 ```
 
 <details>

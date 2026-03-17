@@ -54,7 +54,7 @@ sudo mv radii5-linux-amd64 /usr/local/bin/radii5
 ```sh
 git clone https://github.com/radii5/music.git
 cd music
-go build -o radii5 .
+go build -o radii5 ./cmd/music
 sudo mv radii5 /usr/local/bin/   # Linux/macOS
 ```
 </details>

@@ -7,7 +7,18 @@ radii5 uses [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.0] — 2024-01-01
+## [0.1.0] — 2026-03-17
+
+### Changed
+- Renamed Go module to match repo (`github.com/radii5/music`)
+- Updated README badges for latest release + platforms
+- Improved Windows PowerShell 5 installer (DefaultConnectionLimit, QuickEdit disable, PS5 compatibility)
+- Fixed import paths and revert cleanup
+
+### Added
+- PS5-compatible installer routing
+
+## [0.1.0] — 2026-03-13
 
 ### Added
 - Initial release

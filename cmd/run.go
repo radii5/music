@@ -7,7 +7,7 @@ import (
 	"strconv"
 
 	"github.com/fatih/color"
-	"github.com/radii5/radii5/internal/downloader"
+	"github.com/radii5/music/internal/downloader"
 )
 
 type Options struct {

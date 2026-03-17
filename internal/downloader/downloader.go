@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/radii5/radii5/internal/metadata"
-	"github.com/radii5/radii5/internal/progress"
+	"github.com/radii5/music/internal/metadata"
+	"github.com/radii5/music/internal/progress"
 )
 
 type VideoInfo struct {

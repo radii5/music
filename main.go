@@ -5,7 +5,7 @@ import (
     "github.com/fatih/color"
     "github.com/radii5/music/cmd"
 )
-var version = "0.1.0"
+var version = "0.2.0"
 func main() {
     if len(os.Args) < 2 {
         printUsage()

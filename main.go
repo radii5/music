@@ -3,7 +3,7 @@ import (
     "fmt"
     "os"
     "github.com/fatih/color"
-    "github.com/radii5/radii5/cmd"
+    "github.com/radii5/music/cmd"
 )
 var version = "0.1.0"
 func main() {

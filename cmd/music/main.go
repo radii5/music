@@ -4,52 +4,28 @@ import (
 	"os"
 
 	"github.com/radii5/music/cmd"
-	"github.com/urfave/cli/v2"
 )
 
 var version = "dev"
 
 func main() {
-	app := &cli.App{
-		Name:    "radii5",
-		Usage:   "CLI music downloader powered by yt-dlp",
-		Version: version,
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:    "format",
-				Aliases: []string{"f"},
-				Value:   "mp3",
-				Usage:   "Audio format (mp3, flac, wav, m4a, opus)",
-			},
-			&cli.StringFlag{
-				Name:    "output",
-				Aliases: []string{"o"},
-				Value:   "~/Music/radii5 downloads",
-				Usage:   "Output directory",
-			},
-			&cli.IntFlag{
-				Name:    "threads",
-				Aliases: []string{"t"},
-				Value:   0, // 0 = adaptive based on file size
-				Usage:   "Number of parallel download threads (0 = adaptive)",
-			},
-		},
-		Action: func(c *cli.Context) error {
-			if c.NArg() == 0 {
-				return cli.ShowAppHelp(c)
-			}
-
-			url := c.Args().First()
-			format := c.String("format")
-			output := c.String("output")
-			threads := c.Int("threads")
-
-			cmd.RunWithOptions(url, format, output, threads)
-			return nil
-		},
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		println(version)
+		return
 	}
 
-	if err := app.Run(os.Args); err != nil {
-		os.Exit(1)
+	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
+		println("radii5 - Fast music downloader")
+		println("Usage: radii5 <url> [flags]")
+		println("")
+		println("Flags:")
+		println("  -f, --format    Audio format (mp3, flac, wav, m4a, opus)")
+		println("  -o, --output    Output directory")
+		println("  -t, --threads   Number of parallel download threads")
+		println("  -v, --version   Print version")
+		println("  -h, --help      Show help")
+		return
 	}
+
+	cmd.Run(os.Args[1:])
 }

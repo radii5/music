@@ -45,15 +45,8 @@ var httpClient = NewOptimizedHTTPClient()
 
 const maxRetries = 5
 
-func selfDir() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	return filepath.Dir(exe)
-}
-
-func findBin(name string) string {
+// findBin finds the path to a binary, can be overridden for testing
+var findBin = func(name string) string {
 	if runtime.GOOS == "windows" && !strings.HasSuffix(name, ".exe") {
 		name += ".exe"
 	}
@@ -71,6 +64,14 @@ func findBin(name string) string {
 		return path
 	}
 	return name
+}
+
+func selfDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(exe)
 }
 
 func fileExists(path string) bool {
@@ -206,6 +207,7 @@ func resolve(url string) (*VideoInfo, error) {
 		"--dump-json",
 		"--format", "bestaudio",
 		"--no-playlist",
+		"--socket-timeout", "25", // yt-dlp socket timeout (25s < 30s context)
 		url,
 	)
 
@@ -214,7 +216,12 @@ func resolve(url string) (*VideoInfo, error) {
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
-	err := cmd.Wait()
+	err := cmd.Start()
+	if err != nil {
+		return nil, fmt.Errorf("failed to start yt-dlp: %w", err)
+	}
+
+	err = cmd.Wait()
 
 	// Check for context errors first
 	if ctx.Err() == context.Canceled {

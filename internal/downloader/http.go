@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,13 +47,25 @@ func (rhc *RetryableHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	var lastErr error
 
 	for attempt := 0; attempt <= rhc.MaxRetries; attempt++ {
+		// Check context cancellation before each attempt
+		if req.Context().Err() != nil {
+			return nil, req.Context().Err()
+		}
+
 		if attempt > 0 {
 			// Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s
 			delay := time.Duration(1<<uint(attempt-1)) * rhc.BaseDelay
 			if delay > 30*time.Second {
 				delay = 30 * time.Second // Cap at 30s
 			}
-			time.Sleep(delay)
+
+			// Check context during sleep
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-time.After(delay):
+				// Continue with retry
+			}
 		}
 
 		resp, err := rhc.Client.Do(req)
@@ -75,9 +88,9 @@ func (rhc *RetryableHTTPClient) Do(req *http.Request) (*http.Response, error) {
 
 		lastErr = err
 
-		// Retry on network errors, but not on context cancellation
-		if req.Context().Err() == context.Canceled {
-			return nil, req.Context().Err()
+		// Don't retry on context cancellation errors
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
 		}
 	}
 

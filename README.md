@@ -34,15 +34,10 @@ sudo apt install ffmpeg      # Debian/Ubuntu
 
 **Alternative: Prebuilt releases**
 ```sh
-# Windows (PowerShell)
+# Windows (PowerShell) - advanced users only
 curl -L -o radii5.exe https://github.com/radii5/music/releases/latest/download/radii5-windows-amd64.exe
-# Add to PATH or run from command line:
-.\radii5.exe "https://www.youtube.com/watch?v=VIDEO_ID"
-
-# Linux/macOS
-wget https://github.com/radii5/music/releases/latest/download/radii5-linux-amd64
-chmod +x radii5-linux-amd64
-sudo mv radii5-linux-amd64 /usr/local/bin/radii5
+# NOTE: You must manually install yt-dlp, ffmpeg, and deno
+# Or use the one-liner installer above for automatic setup
 ```
 
 **Alternative: Go install**

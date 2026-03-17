@@ -70,10 +70,26 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Compute SHA256
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+          echo "## SHA256 Checksums" > release_notes.md
+          echo "" >> release_notes.md
+          echo "Verify your download with these checksums:" >> release_notes.md
+          echo "" >> release_notes.md
+          echo '```' >> release_notes.md
+          cat checksums.txt >> release_notes.md
+          echo '```' >> release_notes.md
+          cat release_notes.md
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          body_path: dist/release_notes.md
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

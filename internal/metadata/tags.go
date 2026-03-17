@@ -6,16 +6,49 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/bogem/id3v2/v2"
 )
 
-const maxThumbnailSize = 5 * 1024 * 1024 // 5MB limit
+const maxThumbnailSize = 5 * 1024 * 1024
+
+var allowedHosts = map[string]bool{
+	"i.ytimg.com":               true,
+	"yt3.ggpht.com":             true,
+	"lh3.googleusercontent.com": true,
+	"i9.ytimg.com":              true,
+}
+
+func isAllowedHost(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.TrimPrefix(parsed.Host, "www.")
+	return allowedHosts[host]
+}
+
+func stripQueryParams(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
+}
 
 // fetchImageWithValidation downloads and validates thumbnail images
-func fetchImageWithValidation(url string) ([]byte, error) {
+func fetchImageWithValidation(rawURL string) ([]byte, error) {
+	if !isAllowedHost(rawURL) {
+		return nil, fmt.Errorf("thumbnail host not allowed")
+	}
+
+	url := stripQueryParams(rawURL)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -32,12 +65,10 @@ func fetchImageWithValidation(url string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	// Check status code
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("image fetch failed with status %d", resp.StatusCode)
 	}
 
-	// Check Content-Type
 	contentType := resp.Header.Get("Content-Type")
 	if contentType != "" {
 		mediaType, _, err := mime.ParseMediaType(contentType)
@@ -46,14 +77,12 @@ func fetchImageWithValidation(url string) ([]byte, error) {
 		}
 	}
 
-	// Limit reader to prevent memory exhaustion
 	limitedReader := io.LimitReader(resp.Body, maxThumbnailSize)
 	data, err := io.ReadAll(limitedReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read image data: %w", err)
 	}
 
-	// Check if we hit the size limit
 	if len(data) == maxThumbnailSize {
 		return nil, fmt.Errorf("image too large (>5MB)")
 	}

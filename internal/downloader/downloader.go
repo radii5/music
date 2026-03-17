@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -195,7 +196,31 @@ func Download(url, format, outputDir string, threads int) (err error) {
 	return nil
 }
 
+func sanitizeURL(inputURL string) string {
+	inputURL = strings.TrimSpace(inputURL)
+	if !strings.HasPrefix(inputURL, "http://") && !strings.HasPrefix(inputURL, "https://") {
+		return ""
+	}
+
+	parsed, err := url.Parse(inputURL)
+	if err != nil {
+		return ""
+	}
+
+	if parsed.Host == "" {
+		return ""
+	}
+
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
 func resolve(url string) (*VideoInfo, error) {
+	url = sanitizeURL(url)
+	if url == "" {
+		return nil, fmt.Errorf("invalid URL")
+	}
+
 	url = cleanURL(url)
 	ytdlp := findBin("yt-dlp")
 

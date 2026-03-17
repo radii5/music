@@ -2,8 +2,9 @@ package main
 
 import (
 	"os"
-	"github.com/urfave/cli/v2"
+
 	"github.com/radii5/music/cmd"
+	"github.com/urfave/cli/v2"
 )
 
 var version = "dev"
@@ -29,25 +30,25 @@ func main() {
 			&cli.IntFlag{
 				Name:    "threads",
 				Aliases: []string{"t"},
-				Value:   8,
-				Usage:   "Number of parallel download threads",
+				Value:   0, // 0 = adaptive based on file size
+				Usage:   "Number of parallel download threads (0 = adaptive)",
 			},
 		},
 		Action: func(c *cli.Context) error {
 			if c.NArg() == 0 {
 				return cli.ShowAppHelp(c)
 			}
-			
+
 			url := c.Args().First()
 			format := c.String("format")
 			output := c.String("output")
 			threads := c.Int("threads")
-			
+
 			cmd.RunWithOptions(url, format, output, threads)
 			return nil
 		},
 	}
-	
+
 	if err := app.Run(os.Args); err != nil {
 		os.Exit(1)
 	}

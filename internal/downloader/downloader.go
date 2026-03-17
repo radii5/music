@@ -19,17 +19,17 @@ import (
 )
 
 type VideoInfo struct {
-	Title      string  `json:"title"`
-	Artist     string  `json:"artist"`
-	Uploader   string  `json:"uploader"`
-	Album      string  `json:"album"`
-	Duration   float64 `json:"duration"`
-	URL        string  `json:"url"`
-	Thumbnail  string  `json:"thumbnail"`
-	Ext        string  `json:"ext"`
-	AudioCodec string  `json:"acodec"`
-	Filesize   int64   `json:"filesize"`
-	FilesizeApprox int64 `json:"filesize_approx"`
+	Title          string  `json:"title"`
+	Artist         string  `json:"artist"`
+	Uploader       string  `json:"uploader"`
+	Album          string  `json:"album"`
+	Duration       float64 `json:"duration"`
+	URL            string  `json:"url"`
+	Thumbnail      string  `json:"thumbnail"`
+	Ext            string  `json:"ext"`
+	AudioCodec     string  `json:"acodec"`
+	Filesize       int64   `json:"filesize"`
+	FilesizeApprox int64   `json:"filesize_approx"`
 }
 
 func (v *VideoInfo) DisplayArtist() string {
@@ -39,13 +39,7 @@ func (v *VideoInfo) DisplayArtist() string {
 	return v.Uploader
 }
 
-var httpClient = &http.Client{
-	Transport: &http.Transport{
-		ResponseHeaderTimeout: 30 * time.Second,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-	},
-}
+var httpClient = NewOptimizedHTTPClient()
 
 const maxRetries = 5
 
@@ -124,9 +118,10 @@ func Download(url, format, outputDir string, threads int) error {
 		_, supportsRange, _ := probeURL(info.URL)
 		start := time.Now()
 
-		if supportsRange && size > 0 && threads > 1 {
-			cyan.Printf("  → Downloading in %d parallel chunks...\n\n", threads)
-			if err := parallelDownload(info.URL, tmpFile, size, threads); err != nil {
+		adaptiveThreads := DetermineThreads(size, threads)
+		if supportsRange && size > 0 && adaptiveThreads > 1 {
+			cyan.Printf("  → Downloading in %d parallel chunks...\n\n", adaptiveThreads)
+			if err := parallelDownload(info.URL, tmpFile, size, adaptiveThreads); err != nil {
 				os.Remove(tmpFile)
 				return fmt.Errorf("download failed: %w", err)
 			}
@@ -148,8 +143,8 @@ func Download(url, format, outputDir string, threads int) error {
 		}
 		if size64 > 0 && elapsed.Seconds() > 0 {
 			mbps := float64(size64) / (1 << 20) / elapsed.Seconds()
-			if supportsRange && size > 0 && threads > 1 {
-				color.New(color.FgHiBlack).Printf("  %.1f MB/s  (%.1fs,  %d threads)\n", mbps, elapsed.Seconds(), threads)
+			if supportsRange && size > 0 && adaptiveThreads > 1 {
+				color.New(color.FgHiBlack).Printf("  %.1f MB/s  (%.1fs,  %d threads)\n", mbps, elapsed.Seconds(), adaptiveThreads)
 			} else {
 				color.New(color.FgHiBlack).Printf("  %.1f MB/s  (%.1fs)\n", mbps, elapsed.Seconds())
 			}
@@ -216,7 +211,8 @@ func resolve(url string) (*VideoInfo, error) {
 
 func ytDlpFallback(url, format, outFile string, threads int) error {
 	cyan := color.New(color.FgCyan)
-	cyan.Printf("  → Downloading via yt-dlp (%d fragments)...\n\n", threads)
+	adaptiveThreads := DetermineThreads(0, threads) // 0 size = unknown, use adaptive logic
+	cyan.Printf("  → Downloading via yt-dlp (%d fragments)...\n\n", adaptiveThreads)
 
 	ytdlp := findBin("yt-dlp")
 	args := []string{
@@ -224,7 +220,7 @@ func ytDlpFallback(url, format, outFile string, threads int) error {
 		"-x",
 		"--audio-format", format,
 		"--audio-quality", "0",
-		"--concurrent-fragments", fmt.Sprintf("%d", threads),
+		"--concurrent-fragments", fmt.Sprintf("%d", adaptiveThreads),
 		"--no-colors",
 		"--progress", "--newline",
 		"-o", outFile,

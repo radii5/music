@@ -9,6 +9,21 @@ import (
 	"time"
 )
 
+// Helper functions for compatibility with older Go versions
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // ProgressCallback reports download progress
 type ProgressCallback func(downloaded, total int64)
 
@@ -20,17 +35,107 @@ type ChunkDownloader struct {
 	ChunkSize int64
 }
 
-// NewChunkDownloader creates a new chunk downloader with sensible defaults
-func NewChunkDownloader(threads int, progress ProgressCallback) *ChunkDownloader {
-	if threads <= 0 {
-		threads = 8
-	}
-	return &ChunkDownloader{
-		Client: &http.Client{
-			Timeout: 30 * time.Minute,
+// NewOptimizedHTTPClient creates an HTTP client with optimized transport settings
+func NewOptimizedHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			MaxConnsPerHost:     20,
+			MaxIdleConns:        100,
+			IdleConnTimeout:     90 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+			DisableCompression:  false,
 		},
+		Timeout: 30 * time.Minute,
+	}
+}
+
+// DetermineThreads calculates optimal thread count based on file size and user preference
+func DetermineThreads(fileSize int64, userThreads int) int {
+	if userThreads > 0 {
+		return userThreads // respect --threads flag
+	}
+
+	// Adaptive logic based on file size
+	switch {
+	case fileSize < 5*1024*1024: // < 5MB
+		return 2
+	case fileSize < 20*1024*1024: // < 20MB
+		return 4
+	case fileSize < 100*1024*1024: // < 100MB
+		return 8
+	default: // >= 100MB
+		return 12
+	}
+}
+
+// NewChunkDownloader creates a new chunk downloader with optimized defaults
+func NewChunkDownloader(threads int, progress ProgressCallback) *ChunkDownloader {
+	return &ChunkDownloader{
+		Client:    NewOptimizedHTTPClient(),
 		Progress:  progress,
 		Threads:   threads,
+		ChunkSize: 1024 * 1024, // 1MB chunks
+	}
+}
+
+// ProbeBandwidth measures download speed by downloading a small sample
+func ProbeBandwidth(url string) (float64, error) {
+	client := NewOptimizedHTTPClient()
+
+	// Download first 1MB as a sample
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Range", "bytes=0-1048575") // First 1MB
+	req.Header.Set("User-Agent", "radii5-bandwidth-probe")
+
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1048576))
+	if err != nil {
+		return 0, err
+	}
+
+	elapsed := time.Since(start)
+	if elapsed.Seconds() == 0 {
+		return 0, fmt.Errorf("elapsed time is zero")
+	}
+
+	// Return speed in MB/s
+	mbps := float64(len(data)) / (1 << 20) / elapsed.Seconds()
+	return mbps, nil
+}
+
+// OptimalThreadsForBandwidth calculates optimal threads based on bandwidth
+func OptimalThreadsForBandwidth(mbps float64, fileSize int64) int {
+	// Base logic from file size
+	baseThreads := DetermineThreads(fileSize, 0)
+
+	// Adjust based on bandwidth
+	switch {
+	case mbps < 1: // Slow connection
+		return max(2, baseThreads/2)
+	case mbps < 5: // Moderate connection
+		return baseThreads
+	case mbps < 20: // Fast connection
+		return min(baseThreads*2, 16)
+	default: // Very fast connection
+		return min(baseThreads*3, 24)
+	}
+}
+
+// NewAdaptiveChunkDownloader creates a downloader that determines threads based on file size and bandwidth
+func NewAdaptiveChunkDownloader(userThreads int, progress ProgressCallback) *ChunkDownloader {
+	return &ChunkDownloader{
+		Client:    NewOptimizedHTTPClient(),
+		Progress:  progress,
+		Threads:   userThreads, // Will be updated after probing
 		ChunkSize: 1024 * 1024, // 1MB chunks
 	}
 }
@@ -40,6 +145,17 @@ func (cd *ChunkDownloader) Download(url, dest string) error {
 	size, err := cd.probeSize(url)
 	if err != nil {
 		return err
+	}
+
+	// Update threads based on file size and bandwidth if using adaptive mode
+	if cd.Threads == 0 || (cd.Threads == 8 && size > 0) { // 8 is the old default
+		// Try bandwidth probing first
+		if mbps, err := ProbeBandwidth(url); err == nil {
+			cd.Threads = OptimalThreadsForBandwidth(mbps, size)
+		} else {
+			// Fallback to size-based logic
+			cd.Threads = DetermineThreads(size, cd.Threads)
+		}
 	}
 
 	if cd.Progress != nil {

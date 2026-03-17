@@ -127,7 +127,7 @@ type ghAsset struct {
 }
 
 func latestRelease(apiURL string) (*ghRelease, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := createOptimizedClient()
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return nil, err
@@ -150,6 +150,20 @@ func latestRelease(apiURL string) (*ghRelease, error) {
 		return nil, err
 	}
 	return &rel, nil
+}
+
+// createOptimizedClient creates an HTTP client with optimized transport settings
+func createOptimizedClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			MaxConnsPerHost:     20,
+			MaxIdleConns:        100,
+			IdleConnTimeout:     90 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+			DisableCompression:  false,
+		},
+		Timeout: 15 * time.Second,
+	}
 }
 
 // ── platform detection ────────────────────────────────────────────────────────
@@ -229,7 +243,7 @@ func findAsset(rel *ghRelease, name string) *ghAsset {
 
 // probeSize does a HEAD request to get Content-Length.
 func probeSize(url string) int64 {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := createOptimizedClient()
 	resp, err := client.Head(url)
 	if err != nil {
 		return 0
@@ -240,7 +254,7 @@ func probeSize(url string) int64 {
 
 // fetchRange fetches bytes [start, end] via HTTP Range.
 func fetchRange(url string, start, end int64) ([]byte, error) {
-	client := &http.Client{Timeout: 10 * time.Minute}
+	client := createOptimizedClient()
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -267,7 +281,7 @@ func chunkedDownload(url, dest string, n int) error {
 
 	if size == 0 || n <= 1 {
 		// Fallback: simple streaming download
-		client := &http.Client{Timeout: 30 * time.Minute}
+		client := createOptimizedClient()
 		resp, err := client.Get(url)
 		if err != nil {
 			return err

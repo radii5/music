@@ -4,10 +4,9 @@
 
 <p>Fast music downloader built on <a href="https://github.com/yt-dlp/yt-dlp">yt-dlp</a></p>
 
-[![Release](https://img.shields.io/github/v/release/radii5/music?style=flat&color=50a9ff&label=latest)](https://github.com/radii5/music/releases)
+[![Release](https://img.shields.io/github/v/release/radii5/music?style=flat&color=326ce5&label=latest)](https://github.com/radii5/music/releases)
 [![License](https://img.shields.io/github/license/radii5/music?style=flat&color=40c463)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev)
-[![Platform](https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-24292e?style=flat)](https://github.com/radii5/music/releases)
 
 ![demo](assets/demo.gif)
 

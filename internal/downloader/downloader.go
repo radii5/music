@@ -221,6 +221,11 @@ func resolve(url string) (*VideoInfo, error) {
 		return nil, fmt.Errorf("invalid URL")
 	}
 
+	// Check for playlist URLs and reject them early
+	if strings.Contains(url, "list=") || strings.Contains(url, "/playlist") {
+		return nil, fmt.Errorf("playlist URLs not supported - use individual video URLs")
+	}
+
 	url = cleanURL(url)
 	ytdlp := findBin("yt-dlp")
 

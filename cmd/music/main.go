@@ -30,7 +30,7 @@ func main() {
 			&cli.IntFlag{
 				Name:    "threads",
 				Aliases: []string{"t"},
-				Value:   0, // 0 = adaptive based on file size
+				Value:   0,
 				Usage:   "Number of parallel download threads (0 = adaptive)",
 			},
 		},

@@ -6,6 +6,8 @@
 [![License](https://img.shields.io/github/license/radii5/music?style=flat&color=40c463)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev)
 
+![demo](assets/demo.gif)
+
 ---
 
 ## Install

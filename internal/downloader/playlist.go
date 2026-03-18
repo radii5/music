@@ -64,7 +64,6 @@ func ResolvePlaylist(playlistURL string) ([]PlaylistEntry, error) {
 		}
 	}
 
-	cmd.Wait()
 	return entries, nil
 }
 

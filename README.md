@@ -1,3 +1,5 @@
+<div align="center">
+
 # radii5
 
 <p>Fast music downloader built on <a href="https://github.com/yt-dlp/yt-dlp">yt-dlp</a></p>
@@ -7,6 +9,8 @@
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev)
 
 ![demo](assets/demo.gif)
+
+</div>
 
 ---
 

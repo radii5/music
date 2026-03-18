@@ -1,5 +1,3 @@
-<div align="center">
-
 # radii5
 
 <p>Fast music downloader built on <a href="https://github.com/yt-dlp/yt-dlp">yt-dlp</a></p>
@@ -7,10 +5,6 @@
 [![Release](https://img.shields.io/github/v/release/radii5/music?style=flat&color=326ce5&label=latest)](https://github.com/radii5/music/releases)
 [![License](https://img.shields.io/github/license/radii5/music?style=flat&color=40c463)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev)
-
-![demo](assets/demo.gif)
-
-</div>
 
 ---
 
@@ -81,6 +75,7 @@ radii5 <url>                          # download as MP3 (default)
 radii5 <url> --format flac            # choose format
 radii5 <url> --output ~/Music         # custom output directory
 radii5 <url> --threads 16             # more parallel chunks
+radii5 <url> --workers 4              # concurrent workers for playlists
 ```
 
 Files are saved to `~/Music/radii5 downloads` by default.
@@ -92,6 +87,7 @@ Files are saved to `~/Music/radii5 downloads` by default.
 | `--format` | `-f` | `mp3` | Output format (`mp3` `flac` `m4a` `opus` `aac`) |
 | `--output` | `-o` | `~/Music/radii5 downloads` | Output directory |
 | `--threads` | `-t` | `8` | Parallel download chunks |
+| `--workers` | `-w` | `4` | Concurrent workers for playlists |
 | `--version` | `-v` | | Print version |
 | `--help` | `-h` | | Show usage |
 
@@ -108,6 +104,7 @@ Files are saved to `~/Music/radii5 downloads` by default.
 
 - **Parallel chunk downloading** — splits files into concurrent range requests for faster downloads
 - **Automatic ID3 tags** — embeds title, artist, album, and cover art into MP3s
+- **Playlist support** — downloads entire playlists with concurrent workers
 - **1000+ supported sites** — YouTube, YouTube Music, SoundCloud, Bandcamp, and anything else yt-dlp supports
 - **Zero config** — sensible defaults, works out of the box
 - **Single binary** — one executable, no runtime to manage

@@ -21,6 +21,12 @@ type PlaylistEntry struct {
 	WebpageURL string `json:"webpage_url"`
 }
 
+type resolvedEntry struct {
+	entry PlaylistEntry
+	info  *VideoInfo
+	err   error
+}
+
 func ResolvePlaylist(playlistURL string) ([]PlaylistEntry, error) {
 	ytdlp := findBin("yt-dlp")
 	cmd := buildCommand(ytdlp,
@@ -35,7 +41,7 @@ func ResolvePlaylist(playlistURL string) ([]PlaylistEntry, error) {
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("yt-dlp not found — run the installer")
+		return nil, fmt.Errorf("yt-dlp not found")
 	}
 
 	var entries []PlaylistEntry
@@ -64,7 +70,6 @@ func ResolvePlaylist(playlistURL string) ([]PlaylistEntry, error) {
 
 const titleWidth = 46
 
-// truncTitle uses runes to safely truncate and pad multi-byte strings (emojis, CJK, etc)
 func truncTitle(title string) string {
 	runes := []rune(title)
 	if len(runes) > titleWidth {
@@ -78,7 +83,6 @@ func truncTitle(title string) string {
 	return s
 }
 
-// slotState tracks animation state per slot
 type slotState struct {
 	tp          *TrackProgress
 	oldTitle    string
@@ -87,7 +91,6 @@ type slotState struct {
 	sliding     bool
 }
 
-// renderTitle renders one slot line safely using runes to avoid terminal wrapping.
 func renderTitle(s *slotState) string {
 	tp := s.tp
 	title := tp.Title
@@ -110,16 +113,14 @@ func renderTitle(s *slotState) string {
 		newRunes := []rune(display)
 		oldRunes := []rune(oldStr)
 
-		// Physical Marquee Slide: new title pushes in from left, pushing old out to right
 		leftPart := string(newRunes[titleWidth-offset : titleWidth])
 		rightPart := string(oldRunes[0 : titleWidth-offset])
 
-		oldColor := "\033[36m" // cyan (done)
+		oldColor := "\033[36m"
 		if s.oldFailed {
-			oldColor = "\033[31m" // red (failed)
+			oldColor = "\033[31m"
 		}
 
-		// render the transition pushing to the right
 		return fmt.Sprintf("  \033[36m→  \033[90m%s\033[0m%s%s\033[0m", leftPart, oldColor, rightPart)
 	}
 
@@ -128,7 +129,6 @@ func renderTitle(s *slotState) string {
 	}
 
 	if done {
-		// Stays cyan completely once fully finished
 		return fmt.Sprintf("  \033[36m✓  \033[36m%s\033[0m", display)
 	}
 
@@ -144,7 +144,6 @@ func renderTitle(s *slotState) string {
 		}
 		rest := string(runes[:len(runes)-filled])
 		cyanStr := string(runes[len(runes)-filled:])
-		// Changed \033[90m to \033[32m so the non-converted side stays green
 		return fmt.Sprintf("  \033[36m⟳  \033[0m\033[32m%s\033[36m%s\033[0m", rest, cyanStr)
 	}
 
@@ -152,7 +151,6 @@ func renderTitle(s *slotState) string {
 		return fmt.Sprintf("  \033[90m↻  %s\033[0m", display)
 	}
 
-	// green fill left→right
 	pct := float64(current) / float64(total)
 	runes := []rune(display)
 	filled := int(pct * float64(len(runes)))
@@ -174,6 +172,7 @@ func runBatch(entries []PlaylistEntry, format, outputDir string, threads, worker
 	}
 
 	resolveQueue := make(chan PlaylistEntry, len(entries))
+	downloadQueue := make(chan resolvedEntry, workers*3)
 	results := make(chan result, len(entries))
 
 	for _, e := range entries {
@@ -216,9 +215,8 @@ func runBatch(entries []PlaylistEntry, format, outputDir string, threads, worker
 		for i := 0; i < workers; i++ {
 			s := slots[i]
 
-			// advance slide animation
 			if s.sliding {
-				s.slideOffset += 4 // speed of transition
+				s.slideOffset += 4
 				if s.slideOffset >= titleWidth {
 					s.sliding = false
 					s.slideOffset = titleWidth
@@ -233,20 +231,36 @@ func runBatch(entries []PlaylistEntry, format, outputDir string, threads, worker
 		fmt.Printf("\033[%dA\r", workers+1)
 	}
 
-	// Optimized: workers handle both resolution and download directly
+	const resolvers = 8
+	var resolveWg sync.WaitGroup
+	for i := 0; i < resolvers; i++ {
+		resolveWg.Add(1)
+		go func() {
+			defer resolveWg.Done()
+			for entry := range resolveQueue {
+				info, err := resolve(entry.WebpageURL)
+				downloadQueue <- resolvedEntry{entry: entry, info: info, err: err}
+			}
+		}()
+	}
+
+	go func() {
+		resolveWg.Wait()
+		close(downloadQueue)
+	}()
+
 	var dlWg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		dlWg.Add(1)
 		slotIdx := i
 		go func() {
 			defer dlWg.Done()
-			for entry := range resolveQueue {
+			for re := range downloadQueue {
 				s := slots[slotIdx]
 				tp := s.tp
 
-				// Setup transition animation state for new track
 				mu.Lock()
-				if tp.Title != "" {
+				if tp.Title != "" && !tp.Failed.Load() {
 					s.oldTitle = tp.Title
 					s.oldFailed = tp.Failed.Load()
 					s.sliding = true
@@ -254,27 +268,25 @@ func runBatch(entries []PlaylistEntry, format, outputDir string, threads, worker
 				}
 				mu.Unlock()
 
-				// Resolve and download in the same worker (no queueing delay)
-				info, err := resolve(entry.WebpageURL)
-				if err != nil {
-					tp.Reset(entry.Title, 0)
+				if re.err != nil {
+					tp.Reset(re.entry.Title, 0)
 					tp.Failed.Store(true)
-					results <- result{entry: entry, err: fmt.Errorf("could not resolve URL: %w", err)}
+					results <- result{entry: re.entry, err: fmt.Errorf("could not resolve URL: %w", re.err)}
 					continue
 				}
 
-				tp.Reset(info.Title, info.Filesize)
-				if info.FilesizeApprox > 0 && info.Filesize == 0 {
-					tp.Total.Store(info.FilesizeApprox)
+				tp.Reset(re.info.Title, re.info.Filesize)
+				if re.info.FilesizeApprox > 0 && re.info.Filesize == 0 {
+					tp.Total.Store(re.info.FilesizeApprox)
 				}
 
-				err = downloadResolved(info, entry.WebpageURL, format, outputDir, threads, tp)
+				err := downloadResolved(re.info, re.entry.WebpageURL, format, outputDir, threads, tp)
 				if err != nil {
 					tp.Failed.Store(true)
 				} else {
 					tp.Done.Store(true)
 				}
-				results <- result{entry: entry, err: err}
+				results <- result{entry: re.entry, err: err}
 			}
 		}()
 	}
@@ -354,8 +366,7 @@ func downloadResolved(info *VideoInfo, originalURL, format, outputDir string, th
 					os.Remove(tmpFile)
 					return fmt.Errorf("conversion failed: %w", err)
 				}
-				// Removed `tp.Converting.Store(false)` here to prevent flash of green between
-				// conversion finishing and runBatch registering the sequence completed.
+
 			} else {
 				if err := convertAudio(tmpFile, outFile, format); err != nil {
 					os.Remove(tmpFile)

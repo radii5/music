@@ -2,6 +2,7 @@
 radii5
 radii5.exe
 radii5-*
+music.exe
 
 # Build output
 dist/
@@ -9,6 +10,11 @@ dist/
 # Go
 *.test
 *.out
+
+# Downloads
+*.mp3
+*.tmp
+downloads/
 
 # OS
 .DS_Store

@@ -12,9 +12,10 @@ var version = "dev"
 
 func main() {
 	app := &cli.App{
-		Name:    "radii5",
-		Usage:   "CLI music downloader powered by yt-dlp",
-		Version: version,
+		Name:                   "radii5",
+		Usage:                  "CLI music downloader powered by yt-dlp",
+		Version:                version,
+		UseShortOptionHandling: true,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "format",

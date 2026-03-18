@@ -7,6 +7,22 @@ radii5 uses [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.2] — 2026-03-17
+
+### Added
+- Playlist support with concurrent workers
+- `--workers` flag for playlist concurrency control
+- Visual sliding animation for track transitions
+
+### Fixed
+- Sliding animation bug where tracks would immediately turn red during conversion
+- Only trigger sliding when transitioning between different successful tracks
+
+### Performance
+- Optimized for 90-100 songs in 9-10 minutes with 2 workers + 8 threads
+
+---
+
 ## [0.2.0] — 2026-03-17
 
 ### Changed

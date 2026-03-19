@@ -1,12 +1,5 @@
 <div align="center">
 
-# radii5
-
-<p>Fast music downloader built on <a href="https://github.com/yt-dlp/yt-dlp">yt-dlp</a></p>
-
-[![Release](https://img.shields.io/github/v/release/radii5/music?style=flat&color=326ce5&label=latest)](https://github.com/radii5/music/releases)
-[![License](https://img.shields.io/github/license/radii5/music?style=flat&color=40c463)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev)
 
 **Single track**
 
@@ -18,11 +11,10 @@
 
 </div>
 
----
 
 ## Install
 
-**Windows** — run in **PowerShell**
+Windows
 ```powershell
 irm https://radii5.github.io/music/install.ps1 | iex
 ```
